@@ -35,7 +35,7 @@ O comportamento atual do usuário, fora do app, é: buscar o livro em um navegad
 
 ## 3. Comportamento Desejado
 
-Ao abrir o app, o usuário vê imediatamente sua biblioteca de livros baixados — não há tela de login barrando a entrada. No primeiro acesso, um onboarding explica como usar o app; depois disso ele não reaparece. A partir da biblioteca, o botão "Baixar livros" conduz à busca, solicitando as credenciais Z-Library por meio de um bottom sheet apenas na primeira vez em que forem necessárias.
+Ao abrir o app, o usuário vê imediatamente sua biblioteca de livros baixados — não há tela de login barrando a entrada. O aprendizado é **contextual**: cada fluxo traz sua própria orientação na primeira vez que é usado — a biblioteca ensina a baixar, o leitor ensina a navegar no livro, e assim por diante — e cada uma pode ser pulada isoladamente. A partir da biblioteca, "Baixar livros" conduz à busca, solicitando as credenciais Z-Library por meio de um bottom sheet apenas na primeira vez em que forem necessárias.
 
 Com o livro baixado, o usuário escolhe entre ler ou ouvir. A narração é gerada sob demanda no aparelho, continua com a tela desligada, e compartilha a mesma posição de progresso com a leitura.
 
@@ -47,13 +47,19 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 
 > Os identificadores `FR-xxx` são estáveis e não indicam ordem de leitura. Requisitos acrescentados depois recebem o próximo número livre, preservando as referências já existentes no documento.
 
-### 4.1 Abertura, onboarding e acesso ao download
+### 4.1 Abertura, onboarding contextual e acesso ao download
 
 - **FR-053** — Ao abrir o app, a tela inicial deve ser a biblioteca de livros baixados. Não existe tela de login bloqueando o acesso ao app.
-- **FR-054** — No primeiro acesso, o app deve exibir um onboarding explicando como usar o app, antes de a biblioteca ficar utilizável.
-- **FR-055** — O onboarding deve ser exibido uma única vez. Sua conclusão é persistida localmente e ele não reaparece nas aberturas seguintes.
-- **FR-056** — O onboarding deve ser dispensável a qualquer momento. Dispensar equivale a concluir para efeito do FR-055.
-- **FR-057** — Concluído ou dispensado o onboarding, o app exibe a biblioteca contendo a ação "Baixar livros".
+- **FR-054** — O onboarding é **contextual e independente por fluxo**: cada fluxo relevante possui sua própria orientação, exibida na primeira vez que o usuário entra naquele fluxo. Não existe sequência única de boas-vindas na abertura do app.
+- **FR-055** — Cada orientação deve ser exibida no máximo uma vez, com estado de "visto" próprio, persistido localmente e independente das demais.
+- **FR-056** — Toda orientação deve poder ser pulada. Pular marca **apenas aquela** orientação como vista, sem afetar as demais.
+- **FR-064** — Os pontos de onboarding cobertos nesta versão são: **biblioteca** (como baixar livros), **leitor** (como navegar no livro), **player** (controles de narração) e **vozes** (o que são e como escolher).
+- **FR-065** — A orientação da biblioteca deve ser exibida sobre a própria biblioteca, sem impedir o acesso a ela nem atrasar sua renderização.
+- **FR-066** — Uma orientação cujo fluxo foi abandonado sem que ela fosse concluída ou pulada deve reaparecer na próxima entrada naquele fluxo.
+- **FR-067** — Nunca deve haver duas orientações visíveis simultaneamente. Se um fluxo aninhado for aberto com orientação pendente, a orientação do fluxo anterior é encerrada antes.
+- **FR-068** — A orientação de vozes deve advertir que a voz precisa corresponder ao idioma do livro, já que o app não valida essa correspondência (BR-006).
+- **FR-069** — Os Ajustes devem oferecer a ação de reexibir as orientações, que zera de uma só vez o estado de "visto" de todas elas.
+- **FR-057** — A biblioteca deve oferecer a ação "Baixar livros" em dois pontos: em **destaque visual quando a biblioteca está vazia**, e como **ícone permanente no cabeçalho**, disponível também com a biblioteca preenchida. Ambos levam ao mesmo comportamento.
 - **FR-058** — Ao acionar "Baixar livros", se não houver credenciais Z-Library armazenadas, o app deve exibir um bottom sheet solicitando e-mail e senha.
 - **FR-059** — Autenticação bem-sucedida no bottom sheet deve persistir as credenciais, fechar o bottom sheet e conduzir o usuário diretamente à tela de busca, dando continuidade à intenção original de baixar um livro.
 - **FR-060** — Ao acionar "Baixar livros", se já houver credenciais armazenadas, o app deve navegar diretamente para a tela de busca, sem solicitar autenticação.
@@ -67,7 +73,7 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 - **FR-002** — Após login bem-sucedido, o app deve persistir e-mail, senha e token de sessão no armazenamento seguro do sistema operacional (Android Keystore / iOS Keychain).
 - **FR-003** — Quando uma requisição à Z-Library falhar por sessão inválida ou expirada, o app deve renovar a sessão automaticamente usando as credenciais persistidas, **uma única vez**, e repetir a requisição original de forma transparente ao usuário.
 - **FR-004** — Se a renovação automática falhar, o app deve descartar o token e reabrir o bottom sheet de credenciais sobre a tela atual, com o e-mail preenchido e mensagem indicando que a sessão expirou. A biblioteca local e a leitura/narração de conteúdo já baixado permanecem acessíveis.
-- **FR-005** — O app deve oferecer a ação "sair" na tela de Ajustes, removendo e-mail, senha e token do armazenamento seguro. Livros já baixados e seus progressos permanecem no dispositivo. Após o logout, acionar "Baixar livros" volta a exibir o bottom sheet de credenciais.
+- **FR-005** — Os Ajustes devem oferecer a ação **"Limpar minhas credenciais Z-Library"**, apresentada como ação destrutiva em vermelho. A ação exige confirmação e remove e-mail, senha e token do armazenamento seguro. Livros baixados, progressos, vozes e preferências permanecem intactos. Depois disso, acionar "Baixar livros" volta a exibir o bottom sheet de credenciais.
 - **FR-006** — Credenciais e token nunca podem ser gravados em logs, telemetria, relatórios de erro ou mensagens exibidas na interface.
 
 ### 4.3 Busca
@@ -145,7 +151,7 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 ## 5. Regras de Negócio
 
 - **BR-001** — Busca e download exigem conta Z-Library autenticada; leitura, narração e gestão da biblioteca local **não** exigem. A autenticação é solicitada apenas no momento em que é necessária.
-- **BR-009** — O onboarding é exibido uma única vez por instalação. Não há forma de reexibi-lo dentro do app nesta versão.
+- **BR-009** — Cada orientação de onboarding é exibida no máximo uma vez por instalação, com estado independente das demais, e todas podem ser reexibidas coletivamente pela ação correspondente nos Ajustes.
 - **BR-002** — Somente livros em formato EPUB são suportados, em toda a cadeia (busca, download, leitura, narração).
 - **BR-003** — Toda a síntese de voz ocorre no dispositivo. Nenhum trecho de texto de livro é enviado para serviços externos.
 - **BR-004** — Um livro possui exatamente uma posição de progresso, independentemente do modo de consumo.
@@ -161,15 +167,22 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 ### Fluxo A — Primeiro acesso
 
 1. Usuário abre o app pela primeira vez.
-2. App exibe o onboarding explicando como usar o app.
-3. Usuário percorre o onboarding até o fim, ou o dispensa.
-4. App registra localmente que o onboarding foi visto.
-5. App exibe a biblioteca vazia, com estado vazio orientativo e a ação "Baixar livros".
+2. App exibe a biblioteca vazia, com estado vazio orientativo e "Baixar livros" em destaque.
+3. Sobre a biblioteca, aparece a orientação contextual ensinando a baixar livros.
+4. Usuário percorre a orientação até o fim, ou a pula.
+5. App marca **apenas** a orientação da biblioteca como vista. As demais permanecem pendentes.
 
 ### Fluxo B — Abertura nas vezes seguintes
 
 1. Usuário abre o app.
-2. App exibe diretamente a biblioteca com os livros já baixados e a ação "Baixar livros". Sem onboarding, sem login.
+2. App exibe diretamente a biblioteca com os livros já baixados, sem login e sem a orientação já vista. O ícone de "Baixar livros" segue no cabeçalho.
+
+### Fluxo B2 — Primeira leitura de um livro
+
+1. Usuário abre um livro pela primeira vez, tendo já visto a orientação da biblioteca.
+2. O leitor exibe sua própria orientação, ensinando a navegar no livro.
+3. Usuário conclui ou pula; apenas a orientação do leitor é marcada como vista.
+4. Nas próximas aberturas de qualquer livro, o leitor não exibe mais orientação.
 
 ### Fluxo C — Primeiro download (sem credenciais)
 
@@ -238,8 +251,12 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 | EC-12 | Bateria em modo de economia extrema | Narração pode ser suspensa pelo sistema; ao retomar, continuar do último bloco registrado |
 | EC-13 | Voz removida enquanto era a voz preferida do livro | Ao narrar, o app pede nova seleção de voz |
 | EC-14 | Sessão Z-Library expirada durante uma busca | Renovação transparente (FR-003); se falhar, bottom sheet de credenciais sobre a tela atual |
-| EC-19 | App fechado no meio do onboarding | Onboarding não é considerado concluído e reaparece na próxima abertura |
-| EC-20 | App reinstalado | Estado local é perdido: onboarding reaparece e as credenciais precisam ser informadas de novo |
+| EC-19 | App fechado no meio de uma orientação | Aquela orientação não é marcada como vista e reaparece na próxima entrada no fluxo; as demais não são afetadas |
+| EC-20 | App reinstalado | Estado local é perdido: todas as orientações reaparecem e as credenciais precisam ser informadas de novo |
+| EC-24 | Livro aberto direto no player, sem passar pelo leitor | A orientação do player é exibida; a do leitor permanece pendente para quando o leitor for aberto |
+| EC-25 | Usuário reexibe as orientações nos Ajustes | Todos os estados voltam a `false`; a orientação da biblioteca reaparece já na volta aos Ajustes |
+| EC-26 | Orientação pendente em fluxo aberto sobre outro fluxo com orientação ativa | A orientação anterior é encerrada antes de exibir a nova (FR-067); nenhuma se perde permanentemente |
+| EC-27 | Biblioteca vazia após remover todos os livros | Estado vazio e destaque de "Baixar livros" voltam a ser exibidos; nenhuma orientação é reexibida |
 | EC-21 | "Baixar livros" acionado sem conexão de rede | Bottom sheet informa a falha sem descartar o que foi digitado; se já houver credenciais, a busca abre e sinaliza o erro de rede |
 | EC-22 | Toques repetidos em "Baixar livros" | Apenas um bottom sheet é aberto; nenhuma navegação duplicada para a busca |
 | EC-23 | Credenciais armazenadas porém já inválidas | "Baixar livros" abre a busca normalmente; a falha só aparece na primeira consulta, tratada por FR-003 e FR-004 |
@@ -273,7 +290,10 @@ Persistência local, sem backend próprio.
 `id`, `nome`, `idioma`, `urlModelo`, `caminhoLocal`, `tamanhoBytes`, `checksum`, `estado` (não baixada / baixando / pronta)
 
 **Settings**
-`tamanhoFonte`, `tema`, `velocidadeReproducao`, `onboardingConcluido` (booleano, inicia `false`, torna-se `true` ao concluir ou dispensar o onboarding)
+`tamanhoFonte`, `tema`, `velocidadeReproducao`
+
+**OnboardingState**
+Um booleano por ponto de orientação — `biblioteca`, `leitor`, `player`, `vozes` — cada um iniciando em `false` e tornando-se `true` ao concluir **ou** pular aquela orientação. A ação de reexibir dos Ajustes redefine todos para `false`. Modelado como conjunto de chaves, e não como campo único, para que novos pontos de orientação possam ser acrescentados sem migração destrutiva.
 
 **SecureCredentials** (armazenamento seguro do SO, fora do banco local)
 `email`, `senha`, `tokenSessao`
@@ -293,12 +313,14 @@ O app **não expõe** API própria. Consome:
 
 ## 11. Requisitos de UI/UX
 
-Telas: Onboarding, Biblioteca (inicial), Busca (com filtros), Detalhe do livro, Leitor, Player, Gerenciamento de vozes, Ajustes. Não há tela de login — as credenciais são coletadas em um **bottom sheet** invocável a partir da biblioteca.
+Telas: Biblioteca (inicial), Busca (com filtros), Detalhe do livro, Leitor, Player, Gerenciamento de vozes, Ajustes. Não há tela de login nem tela de onboarding — as credenciais são coletadas em um **bottom sheet**, e as orientações são camadas contextuais sobre as próprias telas.
 
 Estados obrigatórios em cada tela de listagem: carregando, vazio, erro e conteúdo — visualmente distintos entre si.
 
-- O onboarding deve indicar o progresso entre etapas e oferecer "pular" visível desde a primeira.
-- A ação "Baixar livros" é o caminho primário a partir da biblioteca e permanece disponível tanto na biblioteca vazia quanto na biblioteca preenchida.
+- Cada orientação contextual oferece "pular" visível desde o primeiro passo e, quando tiver múltiplas etapas, indica o progresso entre elas.
+- A orientação nunca bloqueia a renderização da tela que a hospeda: a tela aparece primeiro, a orientação por cima.
+- "Baixar livros" aparece em destaque no estado vazio da biblioteca e como ícone permanente no cabeçalho.
+- Nos Ajustes, "Limpar minhas credenciais Z-Library" é apresentada em vermelho, separada das demais opções, e exige confirmação.
 - O bottom sheet de credenciais exibe estado de carregamento durante a autenticação, mensagem de erro no próprio sheet, e é dispensável por gesto ou toque fora.
 - Progresso de download visível e sempre cancelável.
 - Feedback de conclusão ao adicionar livro à biblioteca.
@@ -332,7 +354,7 @@ Estados obrigatórios em cada tela de listagem: carregando, vazio, erro e conte�
 
 ## 14. Critérios de Aceite
 
-**AC-001** — Dado um usuário no primeiro acesso, quando abre o app, então o onboarding é exibido antes de a biblioteca ficar utilizável.
+**AC-001** — Dado um usuário no primeiro acesso, quando abre o app, então a biblioteca é exibida e sobre ela aparece a orientação de como baixar livros.
 
 **AC-002** — Dado um usuário autenticado com token expirado, quando realiza uma busca, então o app renova a sessão automaticamente e apresenta os resultados sem intervenção do usuário.
 
@@ -364,7 +386,7 @@ Estados obrigatórios em cada tela de listagem: carregando, vazio, erro e conte�
 
 **AC-016** — Dado qualquer erro tratado pelo app, quando a mensagem é exibida ou registrada, então ela não contém senha, token nem trechos do conteúdo do livro.
 
-**AC-017** — Dado um usuário que já concluiu ou dispensou o onboarding, quando abre o app, então a biblioteca é exibida diretamente, sem onboarding e sem qualquer solicitação de credenciais.
+**AC-017** — Dado um usuário que já viu a orientação da biblioteca, quando abre o app, então a biblioteca é exibida diretamente, sem orientação e sem qualquer solicitação de credenciais.
 
 **AC-018** — Dado um usuário sem credenciais armazenadas, quando aciona "Baixar livros", então o bottom sheet de credenciais é exibido.
 
@@ -379,6 +401,18 @@ Estados obrigatórios em cada tela de listagem: carregando, vazio, erro e conte�
 **AC-023** — Dado um usuário que executou logout, quando aciona "Baixar livros", então o bottom sheet de credenciais é exibido novamente.
 
 **AC-024** — Dada uma biblioteca com livros baixados e nenhuma credencial armazenada, quando o usuário abre um livro e aciona a narração, então tudo funciona normalmente, sem qualquer solicitação de autenticação.
+
+**AC-025** — Dado um usuário que pulou a orientação da biblioteca, quando abre um livro pela primeira vez, então a orientação do leitor é exibida, provando que os estados são independentes.
+
+**AC-026** — Dado um usuário que abandonou o leitor sem concluir nem pular sua orientação, quando abre um livro novamente, então a orientação do leitor é exibida outra vez.
+
+**AC-027** — Dado um usuário que já viu todas as orientações, quando aciona "reexibir orientações" nos Ajustes, então todas voltam a ser exibidas nas próximas entradas em seus respectivos fluxos.
+
+**AC-028** — Dada uma biblioteca vazia, quando o usuário a visualiza, então "Baixar livros" aparece em destaque; e dada uma biblioteca preenchida, então a mesma ação permanece acessível pelo ícone no cabeçalho.
+
+**AC-029** — Dado um usuário com credenciais armazenadas, quando aciona "Limpar minhas credenciais Z-Library" nos Ajustes e confirma, então as credenciais são removidas do armazenamento seguro e os livros, progressos e vozes permanecem intactos.
+
+**AC-030** — Dado o diálogo de confirmação da limpeza de credenciais, quando o usuário cancela, então nenhuma credencial é removida.
 
 ---
 
@@ -401,7 +435,7 @@ Estrutura antecipada — a ser confirmada na fase de design, não implementada a
 - **Serviço de áudio em background** — foreground service, sessão de mídia, notificação e tratamento de foco de áudio.
 - **Leitor EPUB** — renderização paginada com sumário, fonte e tema.
 - **Navegação e telas** — Onboarding, Biblioteca (rota inicial), Busca, Detalhe, Leitor, Player, Vozes, Ajustes, e o bottom sheet de credenciais como componente invocável.
-- **Gate de onboarding** — leitura do estado `onboardingConcluido` antes de decidir a rota inicial, sem piscar a biblioteca antes do onboarding.
+- **Orientações contextuais** — componente reutilizável de orientação, com registro de pontos por chave, consulta e escrita do `OnboardingState`, e garantia de exclusividade entre orientações simultâneas (FR-067).
 - **Guarda de credenciais** — verificação do armazenamento seguro no acionamento de "Baixar livros", decidindo entre abrir o bottom sheet ou navegar para a busca.
 - **Build** — configuração de development build (config plugin do módulo nativo), pois o Expo Go não suporta o TTS.
 
@@ -434,7 +468,11 @@ Explicitamente **não** serão implementados nesta versão:
 - **Q-004** — Qual o conjunto inicial de vozes a ser oferecido na tela de gerenciamento? Apenas pt_BR-faber, ou já uma lista com vozes de outros idiomas?
 - **Q-005** — Confirmação da restrição de distribuição: o app será distribuído por APK/sideload, sem publicação em loja. Há intenção de suporte a iOS em algum momento?
 - **Q-006** — Existe limite desejado de espaço em disco para a biblioteca, ou o app apenas reage à falta de espaço quando ela ocorre?
-- **Q-007** — Qual o conteúdo e quantas etapas o onboarding deve ter?
-- **Q-008** — A ação "Baixar livros" fica sempre visível na biblioteca, ou apenas quando ela está vazia?
-- **Q-009** — O onboarding deve poder ser reexibido a partir dos Ajustes? BR-009 hoje diz que não.
-- **Q-010** — Ainda faz sentido o Ajustes ser acessível sem credenciais? Hoje é onde vive o logout (FR-005).
+- ~~**Q-007**~~ — *Resolvida:* onboarding contextual e independente por fluxo, cada um pulável isoladamente (FR-054 a FR-056, FR-064).
+- ~~**Q-008**~~ — *Resolvida:* destaque no estado vazio mais ícone permanente no cabeçalho (FR-057).
+- ~~**Q-009**~~ — *Resolvida:* sim, reexibição coletiva pelos Ajustes (FR-069).
+- ~~**Q-010**~~ — *Resolvida:* Ajustes acessível sem credenciais, com "Limpar minhas credenciais Z-Library" em vermelho (FR-005).
+- **Q-011** — A lista de pontos de orientação em FR-064 (biblioteca, leitor, player, vozes) está completa? A tela de busca e o gerenciamento de vozes mereceriam orientação própria?
+- **Q-012** — Cada orientação é um passo único ou uma sequência de vários? FR-055 funciona nos dois casos, mas a UI muda.
+- **Q-013** — Formato das orientações: sobreposição escurecida destacando elementos da tela (coach marks), ou cartão explicativo simples? Coach marks ensinam melhor e custam mais.
+- **Q-014** — A reexibição dos Ajustes (FR-069) zera todas as orientações de uma vez. Faria sentido reexibir uma específica?
