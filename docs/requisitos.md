@@ -52,6 +52,9 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 - **FR-053** — Ao abrir o app, a tela inicial deve ser a biblioteca de livros baixados. Não existe tela de login bloqueando o acesso ao app.
 - **FR-054** — O onboarding é **contextual e independente por fluxo**: cada fluxo relevante possui sua própria orientação, exibida na primeira vez que o usuário entra naquele fluxo. Não existe sequência única de boas-vindas na abertura do app.
 - **FR-055** — Cada orientação deve ser exibida no máximo uma vez, com estado de "visto" próprio, persistido localmente e independente das demais.
+- **FR-073** — Cada orientação é composta por **vários passos** sequenciais, com navegação para avançar, indicação de progresso entre os passos e "pular" disponível em qualquer passo.
+- **FR-074** — As orientações usam o formato **coach mark**: sobreposição escurecida sobre a tela real, com recorte destacando o elemento que está sendo explicado e um balão descritivo ancorado a ele.
+- **FR-075** — Um passo cujo elemento-alvo não esteja visível ou renderizado deve ser omitido, sem interromper a sequência nem exibir recorte vazio.
 - **FR-056** — Toda orientação deve poder ser pulada. Pular marca **apenas aquela** orientação como vista, sem afetar as demais.
 - **FR-064** — Os pontos de onboarding cobertos nesta versão são: **biblioteca** (como baixar livros), **leitor** (como navegar no livro), **player** (controles de narração) e **vozes** (o que são e como escolher).
 - **FR-065** — A orientação da biblioteca deve ser exibida sobre a própria biblioteca, sem impedir o acesso a ela nem atrasar sua renderização.
@@ -98,7 +101,10 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 
 - **FR-019** — A tela inicial deve listar os livros baixados com capa, título, autor e indicador de progresso.
 - **FR-020** — Com a biblioteca vazia, deve ser exibido estado vazio orientando o usuário a realizar a primeira busca.
-- **FR-021** — O usuário deve poder remover um livro. A remoção apaga o arquivo EPUB, a capa em cache, os arquivos temporários de áudio e o progresso associado, mediante confirmação.
+- **FR-021** — O usuário deve poder remover um livro, mediante confirmação. A remoção apaga o arquivo EPUB, a capa em cache e os arquivos temporários de áudio. **O progresso de leitura e a voz preferida são preservados localmente.**
+- **FR-070** — Ao baixar novamente um livro previamente removido, o app deve restaurar o progresso e a voz preferida registrados anteriormente para aquele livro.
+- **FR-071** — A identidade de um livro, para efeito de FR-070, é dada pelo identificador da obra na Z-Library. Dois arquivos distintos da mesma obra são tratados como o mesmo livro; a mesma obra obtida por registros diferentes na origem não é reconciliada nesta versão.
+- **FR-072** — Os Ajustes devem informar quantos progressos órfãos estão armazenados e permitir descartá-los, mediante confirmação.
 - **FR-022** — Cada livro da biblioteca deve oferecer as ações "Ler" e "Ouvir".
 
 ### 4.6 Leitor
@@ -113,6 +119,7 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 ### 4.7 Gerenciamento de vozes
 
 - **FR-029** — O app deve oferecer uma tela de gerenciamento de vozes, listando as vozes Piper disponíveis com nome, idioma, tamanho aproximado e estado (não baixada, baixando, pronta).
+- **FR-077** — O catálogo inicial contém **apenas vozes em português do Brasil**. Na prática, livros em outros idiomas não têm narração utilizável nesta versão. O catálogo é dado de configuração, não código, de modo que acrescentar idiomas depois não exija nova build.
 - **FR-030** — O usuário deve poder baixar uma voz sob demanda, com progresso visível. A integridade do arquivo baixado deve ser verificada antes de marcá-lo como pronto.
 - **FR-031** — O usuário deve poder remover uma voz baixada para liberar espaço. Uma voz em uso por uma narração ativa não pode ser removida.
 - **FR-032** — Um download de voz interrompido deve poder ser retomado ou reiniciado. Um arquivo incompleto nunca deve ser considerado pronto para uso.
@@ -133,7 +140,8 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 - **FR-041** — O áudio sintetizado deve ser gravado como arquivo temporário. Blocos já reproduzidos e fora da janela de buffer devem ser apagados automaticamente.
 - **FR-042** — O player deve oferecer: play/pause, avançar bloco, voltar bloco, capítulo anterior, próximo capítulo e ajuste de velocidade de reprodução.
 - **FR-043** — A velocidade de reprodução deve ser persistida globalmente e aplicada aos livros seguintes.
-- **FR-044** — A reprodução deve continuar com o app em segundo plano ou com a tela desligada, por meio de foreground service no Android.
+- **FR-044** — A reprodução deve continuar com o app em segundo plano ou com a tela desligada. No iOS, por meio do modo de background de áudio e de sessão de áudio ativa; no Android, por meio de foreground service.
+- **FR-076** — A síntese dos próximos blocos deve ocorrer enquanto a sessão de áudio estiver ativa. No iOS, o app é suspenso pouco depois de o áudio cessar, portanto pausar a narração encerra a síntese antecipada; retomar reinicia a partir do último bloco registrado.
 - **FR-045** — Deve haver notificação de mídia exibindo título do livro, capítulo atual e controles de play/pause e avançar/voltar.
 - **FR-046** — Ao saltar de capítulo, o buffer pendente deve ser descartado e a síntese reiniciada a partir do novo ponto.
 - **FR-047** — Perda de foco de áudio (chamada telefônica, outro app tocando) deve pausar a narração. A retomada automática ocorre apenas quando a perda de foco foi transitória.
@@ -257,6 +265,13 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 | EC-25 | Usuário reexibe as orientações nos Ajustes | Todos os estados voltam a `false`; a orientação da biblioteca reaparece já na volta aos Ajustes |
 | EC-26 | Orientação pendente em fluxo aberto sobre outro fluxo com orientação ativa | A orientação anterior é encerrada antes de exibir a nova (FR-067); nenhuma se perde permanentemente |
 | EC-27 | Biblioteca vazia após remover todos os livros | Estado vazio e destaque de "Baixar livros" voltam a ser exibidos; nenhuma orientação é reexibida |
+| EC-28 | Livro removido e baixado novamente | Progresso e voz preferida são restaurados (FR-070) |
+| EC-29 | Muitos progressos órfãos acumulados | Ajustes informam a quantidade e permitem descartá-los (FR-072) |
+| EC-30 | Livro em idioma sem voz disponível no catálogo | Narração indisponível; o app explica que não há voz para aquele idioma, em vez de narrar com voz incompatível |
+| EC-31 | Passo de coach mark cujo elemento não está em tela | Passo omitido, sequência continua sem recorte vazio (FR-075) |
+| EC-32 | Rotação de tela ou mudança de tamanho durante um coach mark | Recorte e balão se reposicionam sobre o elemento correto |
+| EC-33 | Certificado de assinatura expirado no iOS | O app deixa de abrir até ser reassinado — limitação de plataforma, não tratável em código |
+| EC-34 | Narração pausada por longo período no iOS | App é suspenso pelo sistema; retomar reinicia a síntese a partir do último bloco registrado (FR-076) |
 | EC-21 | "Baixar livros" acionado sem conexão de rede | Bottom sheet informa a falha sem descartar o que foi digitado; se já houver credenciais, a busca abre e sinaliza o erro de rede |
 | EC-22 | Toques repetidos em "Baixar livros" | Apenas um bottom sheet é aberto; nenhuma navegação duplicada para a busca |
 | EC-23 | Credenciais armazenadas porém já inválidas | "Baixar livros" abre a busca normalmente; a falha só aparece na primeira consulta, tratada por FR-003 e FR-004 |
@@ -284,7 +299,12 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 Persistência local, sem backend próprio.
 
 **Book**
-`id`, `titulo`, `autor`, `idioma`, `ano`, `caminhoArquivo`, `caminhoCapa`, `tamanhoBytes`, `baixadoEm`, `posicaoProgresso` (capítulo + índice do bloco), `vozPreferidaId`, `estado` (baixando / pronto / falhou / inválido)
+`id` (identificador da obra na Z-Library), `titulo`, `autor`, `idioma`, `ano`, `caminhoArquivo`, `caminhoCapa`, `tamanhoBytes`, `baixadoEm`, `estado` (baixando / pronto / falhou / inválido)
+
+**BookProgress** — entidade **independente do Book**, com ciclo de vida próprio
+`bookId`, `posicao` (capítulo + índice do bloco), `vozPreferidaId`, `atualizadoEm`
+
+Separada de `Book` porque sobrevive à remoção do livro (FR-021 e FR-070). Um `BookProgress` sem `Book` correspondente é um progresso órfão, legítimo e conservado até que o usuário o descarte (FR-072).
 
 **Voice**
 `id`, `nome`, `idioma`, `urlModelo`, `caminhoLocal`, `tamanhoBytes`, `checksum`, `estado` (não baixada / baixando / pronta)
@@ -337,7 +357,11 @@ Estados obrigatórios em cada tela de listagem: carregando, vazio, erro e conte�
 - **Risco aceito conscientemente pelo usuário:** o app persiste a **senha**, além do token, para evitar re-login. Isso significa que o comprometimento físico ou lógico do dispositivo expõe uma credencial reutilizável, potencialmente compartilhada com outros serviços. A alternativa de menor risco — persistir apenas o token — foi avaliada e descartada em favor da conveniência. Mitigações recomendadas: não permitir backup do app na nuvem, e considerar proteção biométrica em iteração futura.
 - Conteúdo dos livros e áudio sintetizado permanecem no armazenamento privado do app.
 - Nenhum dado de uso é enviado para serviços externos.
-- **Restrição de distribuição:** um app cuja função é baixar da Z-Library não é publicável na Google Play nem na App Store. A distribuição prevista é por APK/sideload no Android. Isso condiciona atualização, assinatura de build e ausência de canal oficial de crash reporting.
+- **Restrição de distribuição:** um app cuja função é baixar da Z-Library não é publicável na Google Play nem na App Store. Com **iOS como alvo primário**, isso passa a ser o obstáculo operacional mais pesado do projeto:
+  - No Android, distribuir por APK é trivial e a instalação vale indefinidamente.
+  - No iOS não existe equivalente. As alternativas são sideload via AltStore/SideStore, com certificado válido por 7 dias em conta gratuita ou cerca de um ano em conta paga de desenvolvedor, exigindo reassinatura periódica; ou TestFlight interno, que exige conta de desenvolvedor e cujas builds expiram em torno de 90 dias. O acesso a marketplaces alternativos introduzido na União Europeia não se aplica ao Brasil.
+  - Em qualquer cenário iOS, o app **para de abrir** quando o certificado expira, até ser reassinado. Isso é manutenção recorrente, não um custo de setup.
+  - Ver Q-015 na seção de questões abertas.
 
 ---
 
@@ -348,7 +372,9 @@ Estados obrigatórios em cada tela de listagem: carregando, vazio, erro e conte�
 - **Bateria** — síntese preguiçosa, apenas para os blocos necessários; nenhuma pré-renderização especulativa do livro inteiro.
 - **Offline** — todas as funcionalidades sobre conteúdo já baixado operam sem rede.
 - **Confiabilidade** — falha em um bloco de síntese não encerra a sessão de escuta.
-- **Compatibilidade** — Android como alvo primário. React Native com **development build** (EAS ou prebuild); o app não roda no Expo Go por depender de módulo nativo.
+- **Compatibilidade** — **iOS como alvo primário**, Android como alvo secundário. React Native com **development build** (EAS ou prebuild); o app não roda no Expo Go por depender de módulo nativo. O TurboModule do sherpa-onnx declara suporte a iOS, o que precisa ser confirmado no spike.
+- **Armazenamento no iOS** — arquivos de livro e áudio devem ser marcados para exclusão do backup do iCloud, evitando sincronizar conteúdo volumoso e sensível.
+- **Chaveiro no iOS** — as credenciais devem ser gravadas com acessibilidade restrita ao dispositivo e sem sincronização com o iCloud Keychain, para que a senha armazenada não se propague a outros aparelhos.
 
 ---
 
@@ -414,6 +440,18 @@ Estados obrigatórios em cada tela de listagem: carregando, vazio, erro e conte�
 
 **AC-030** — Dado o diálogo de confirmação da limpeza de credenciais, quando o usuário cancela, então nenhuma credencial é removida.
 
+**AC-031** — Dado um livro lido até determinado ponto, quando o usuário o remove e o baixa novamente, então a leitura retoma na posição anterior e a voz preferida é restaurada.
+
+**AC-032** — Dado um livro removido, quando o usuário consulta os Ajustes, então a quantidade de progressos órfãos é informada e pode ser descartada mediante confirmação.
+
+**AC-033** — Dado um livro em idioma sem voz no catálogo, quando o usuário aciona "Ouvir", então o app informa que não há voz disponível para aquele idioma, sem oferecer narração com voz incompatível.
+
+**AC-034** — Dada uma orientação de múltiplos passos, quando o usuário aciona "pular" em qualquer passo, então a sequência é encerrada e apenas aquela orientação é marcada como vista.
+
+**AC-035** — Dado um passo de coach mark cujo elemento-alvo não está renderizado, quando a sequência chega nele, então o passo é omitido e a sequência prossegue sem recorte vazio.
+
+**AC-036** — Dada uma narração em curso no iOS, quando o usuário bloqueia a tela e guarda o aparelho, então o áudio continua e os controles permanecem funcionais na tela de bloqueio.
+
 ---
 
 ## 15. Sistemas Existentes Impactados
@@ -432,7 +470,9 @@ Estrutura antecipada — a ser confirmada na fase de design, não implementada a
 - **Módulo TTS** — integração com o TurboModule sherpa-onnx; carga do modelo, síntese por bloco e gestão de ciclo de vida.
 - **Pipeline de texto** — parsing do EPUB, extração e segmentação em blocos narráveis.
 - **Motor de reprodução** — buffer de blocos, gravação de WAV temporários, enfileiramento no player e limpeza.
-- **Serviço de áudio em background** — foreground service, sessão de mídia, notificação e tratamento de foco de áudio.
+- **Serviço de áudio em background** — sessão de áudio e modo de background no iOS, foreground service no Android, controles na tela de bloqueio e tratamento de interrupções de áudio.
+- **Coach marks** — componente de sobreposição com recorte ancorado a elementos reais, medição de posição e reposicionamento em mudanças de layout.
+- **Distribuição iOS** — assinatura, perfis de provisionamento e rotina de reassinatura periódica.
 - **Leitor EPUB** — renderização paginada com sumário, fonte e tema.
 - **Navegação e telas** — Onboarding, Biblioteca (rota inicial), Busca, Detalhe, Leitor, Player, Vozes, Ajustes, e o bottom sheet de credenciais como componente invocável.
 - **Orientações contextuais** — componente reutilizável de orientação, com registro de pontos por chave, consulta e escrita do `OnboardingState`, e garantia de exclusividade entre orientações simultâneas (FR-067).
@@ -454,7 +494,6 @@ Explicitamente **não** serão implementados nesta versão:
 - Controles por botões de fone de ouvido e integração com sistemas automotivos.
 - Sincronização entre dispositivos, conta própria, backend ou backup em nuvem.
 - Publicação nas lojas oficiais de aplicativos.
-- Suporte a iOS nesta versão.
 - Clonagem de voz, ajuste de entonação ou vozes personalizadas.
 - Modo de leitura em rolagem contínua (apenas paginado).
 
@@ -462,17 +501,24 @@ Explicitamente **não** serão implementados nesta versão:
 
 ## 18. Questões Abertas
 
-- **Q-001** — A integração com a Z-Library depende de endpoints não documentados e instáveis. É necessário um spike técnico para validar autenticação, busca e download antes de qualquer estimativa. Aceita-se iniciar por este spike?
-- **Q-002** — A seleção manual de voz (FR-034) permite ao usuário narrar um livro em inglês com voz pt-BR, produzindo áudio ininteligível. FR-036 mitiga exibindo o idioma do EPUB, mas não impede o erro. Confirma-se que basta o aviso, sem bloqueio?
-- **Q-003** — A remoção de um livro apaga também o progresso (FR-021). Se o mesmo livro for baixado novamente, o progresso reinicia do zero. Isso é aceitável?
-- **Q-004** — Qual o conjunto inicial de vozes a ser oferecido na tela de gerenciamento? Apenas pt_BR-faber, ou já uma lista com vozes de outros idiomas?
-- **Q-005** — Confirmação da restrição de distribuição: o app será distribuído por APK/sideload, sem publicação em loja. Há intenção de suporte a iOS em algum momento?
-- **Q-006** — Existe limite desejado de espaço em disco para a biblioteca, ou o app apenas reage à falta de espaço quando ela ocorre?
+- ~~**Q-001**~~ — *Resolvida:* o projeto começa pelo spike técnico da integração Z-Library, antes de qualquer estimativa.
+- ~~**Q-002**~~ — *Resolvida:* apenas avisar sobre idioma divergente, sem bloqueio (BR-006, FR-036, FR-068).
+- ~~**Q-003**~~ — *Resolvida:* o progresso persiste no aparelho; a remoção apaga somente o livro (FR-021, FR-070 a FR-072).
+- ~~**Q-004**~~ — *Resolvida:* catálogo inicial apenas com vozes pt-BR (FR-077).
+- ~~**Q-005**~~ — *Resolvida:* sem publicação em loja, e **iOS como plataforma principal**. Consequências operacionais em §12; desdobramento em Q-015.
+- ~~**Q-006**~~ — *Resolvida:* sem teto de armazenamento; o limite é a capacidade do aparelho (EC-06 trata a falta de espaço).
 - ~~**Q-007**~~ — *Resolvida:* onboarding contextual e independente por fluxo, cada um pulável isoladamente (FR-054 a FR-056, FR-064).
 - ~~**Q-008**~~ — *Resolvida:* destaque no estado vazio mais ícone permanente no cabeçalho (FR-057).
 - ~~**Q-009**~~ — *Resolvida:* sim, reexibição coletiva pelos Ajustes (FR-069).
 - ~~**Q-010**~~ — *Resolvida:* Ajustes acessível sem credenciais, com "Limpar minhas credenciais Z-Library" em vermelho (FR-005).
-- **Q-011** — A lista de pontos de orientação em FR-064 (biblioteca, leitor, player, vozes) está completa? A tela de busca e o gerenciamento de vozes mereceriam orientação própria?
-- **Q-012** — Cada orientação é um passo único ou uma sequência de vários? FR-055 funciona nos dois casos, mas a UI muda.
-- **Q-013** — Formato das orientações: sobreposição escurecida destacando elementos da tela (coach marks), ou cartão explicativo simples? Coach marks ensinam melhor e custam mais.
-- **Q-014** — A reexibição dos Ajustes (FR-069) zera todas as orientações de uma vez. Faria sentido reexibir uma específica?
+- ~~**Q-011**~~ — *Resolvida:* sem orientação para os filtros de busca; a lista de FR-064 permanece como está.
+- ~~**Q-012**~~ — *Resolvida:* cada orientação tem vários passos (FR-073).
+- ~~**Q-013**~~ — *Resolvida:* formato coach mark, com recorte sobre o elemento real (FR-074, FR-075).
+- ~~**Q-014**~~ — *Resolvida:* a reexibição zera todas as orientações de uma vez (FR-069).
+
+### Pendentes
+
+- **Q-015** — Com iOS como plataforma principal e sem publicação em loja, qual o método de distribuição pretendido: sideload por AltStore/SideStore, ou TestFlight interno? Existe conta paga de desenvolvedor Apple disponível? A resposta determina a frequência de reassinatura e se o app deixará de abrir periodicamente (§12, EC-33).
+- **Q-016** — O Android continua no escopo desta versão como alvo secundário, ou fica para depois? Manter os dois desde o início encarece testes e distribuição; adiar o Android simplifica, ao custo de descobrir tarde eventuais divergências de plataforma.
+- **Q-017** — O spike deve validar apenas a integração Z-Library, ou também o sherpa-onnx rodando no iOS? O binding é comunitário e declara suporte a iOS, o que ainda não foi confirmado na prática — e é o segundo maior risco técnico do projeto.
+- **Q-018** — Com catálogo apenas em pt-BR (FR-077), o filtro de idioma da busca deve vir pré-ajustado para português, evitando que o usuário baixe livros que não conseguirá ouvir?
