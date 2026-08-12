@@ -569,6 +569,15 @@ O spike é bem-sucedido se a Frente A completar os itens 1 a 5 e a Frente B comp
 - **Se a Frente A falhar** — o app perde o download automático e passa a receber EPUBs por importação manual, permanecendo leitor e narrador. Boa parte das seções 4.2 a 4.4 sai do escopo, e o valor do produto diminui, mas ele continua existindo.
 - **Se a Frente B falhar** — substituir o Piper pelo sintetizador nativo do iOS, que roda offline e possui vozes em português. A qualidade cai e o controle sobre o resultado diminui, porém o risco técnico é praticamente nulo e as seções 4.7 a 4.9 se simplificam bastante.
 
+### Fora do escopo do spike
+
+Contornar CAPTCHA, rotacionar domínios automaticamente ou driblar limites de requisição. Encontrando qualquer uma dessas barreiras, o spike a **reporta como restrição** em vez de tentar vencê-la — o objetivo é medir viabilidade, não forçar acesso.
+
+### Restrições de execução
+
+- A Frente B exige **macOS com Xcode e um iPhone físico**. RTF medido em simulador não tem valor, porque o simulador usa a CPU do Mac.
+- A Frente A exige credenciais reais de uma conta Z-Library, fornecidas por **variável de ambiente** e jamais versionadas.
+
 ### Entregável
 
 Um relatório com os números medidos, o que funcionou, o que não funcionou, e a recomendação de seguir com o plano principal ou com um dos alternativos.
