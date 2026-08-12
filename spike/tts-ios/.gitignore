@@ -1,0 +1,9 @@
+# Modelo de voz — ~63 MB, baixado por scripts/fetch-model.sh
+assets/model/
+
+# Nativo gerado pelo prebuild
+ios/
+android/
+
+node_modules/
+.expo/

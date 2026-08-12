@@ -1,0 +1,27 @@
+{
+  "name": "spike-tts-ios",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.js",
+  "description": "Spike descartável — mede o RTF do Piper via sherpa-onnx em iPhone físico",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "prebuild": "expo prebuild --platform ios --clean",
+    "ios": "expo run:ios --device",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "expo": "~52.0.0",
+    "expo-asset": "~11.0.0",
+    "expo-dev-client": "~5.0.0",
+    "expo-file-system": "~18.0.0",
+    "expo-speech": "~13.0.0",
+    "react": "18.3.1",
+    "react-native": "0.76.5",
+    "react-native-sherpa-onnx": "^0.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "~18.3.12",
+    "typescript": "~5.7.0"
+  }
+}

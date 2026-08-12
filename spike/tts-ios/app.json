@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "z-tts spike",
+    "slug": "z-tts-spike",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "assetBundlePatterns": ["assets/model/*"],
+    "ios": {
+      "bundleIdentifier": "com.erickfraga.ztts.spike",
+      "supportsTablet": false,
+      "infoPlist": {
+        "UIBackgroundModes": ["audio"]
+      }
+    },
+    "plugins": ["expo-dev-client"],
+    "extra": {
+      "comment": "UIBackgroundModes audio é necessário para validar o item 7 da Frente B — síntese prosseguindo com o app em background (FR-044, FR-076)."
+    }
+  }
+}
