@@ -36,7 +36,10 @@ export class HttpError extends Error {
   readonly bodyPreview: string;
 
   constructor(status: number, bodyPreview: string, url: string) {
-    super(`HTTP ${status} em ${url} — ${bodyPreview.slice(0, 160)}`);
+    // Corpo achatado em uma linha: HTML de erro vem com quebras que picotam
+    // o relatório e escondem o resto do passo.
+    const flat = bodyPreview.replace(/\s+/g, " ").trim().slice(0, 140);
+    super(`HTTP ${status} em ${url} — ${flat}`);
     this.name = "HttpError";
     this.status = status;
     this.bodyPreview = bodyPreview;

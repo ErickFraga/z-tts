@@ -11,7 +11,8 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { loadConfig } from "./endpoints.ts";
 import { ZLibraryClient, HttpError, type SearchResult } from "./zlibrary.ts";
 import { checkEpub } from "./epub.ts";
-import { Report } from "./report.ts";
+import { Report, explainNetworkCode } from "./report.ts";
+import { preflight, summarizePreflight } from "./preflight.ts";
 
 const config = loadConfig();
 const client = new ZLibraryClient(config);
@@ -21,13 +22,35 @@ console.log(`Frente A — Integração Z-Library`);
 console.log(`Domínio: ${config.baseUrl}`);
 console.log(`Conta:   ${maskEmail(config.email)}\n`);
 
-// ---------------------------------------------------------------- 1. Login
-const loginOutcome = await report.run(1, "Autenticação", async () => {
-  const { tokenSource } = await client.login();
-  return { outcome: "PASS", detail: `sessão obtida via ${tokenSource}` };
-});
+// -------------------------------------------------------------- 0. Pré-voo
+const connectivity = await preflight(config.baseUrl);
+const reachable = connectivity.addresses.length > 0 && connectivity.tcpReachable;
 
-const authenticated = loginOutcome === "PASS";
+await report.run(0, "Conectividade com o domínio", async () => ({
+  outcome: reachable ? "PASS" : "BLOCKED",
+  detail: summarizePreflight(connectivity),
+}));
+
+if (!reachable) {
+  const cause =
+    explainNetworkCode(connectivity.dnsError ?? connectivity.tcpError ?? "") ??
+    "causa não identificada";
+  console.log(`\n  Causa provável: ${cause}.`);
+  console.log(`  Sem alcançar o domínio, nenhum passo adiante tem valor diagnóstico.\n`);
+}
+
+// ---------------------------------------------------------------- 1. Login
+let authenticated = false;
+
+if (!reachable) {
+  report.skip(1, "Autenticação", "domínio inalcançável");
+} else {
+  const loginOutcome = await report.run(1, "Autenticação", async () => {
+    const { tokenSource } = await client.login();
+    return { outcome: "PASS", detail: `sessão obtida via ${tokenSource}` };
+  });
+  authenticated = loginOutcome === "PASS";
+}
 
 // ------------------------------------------------------- 2. Reuso do token
 if (!authenticated) {
@@ -140,18 +163,22 @@ if (!authenticated) {
 }
 
 // ------------------------------------------------------------- 7. Cota
-await report.run(7, "Sinalização de cota diária", async () => {
-  await client.login(); // sessão foi descartada no passo 6
-  const profile = await client.profile();
-  const quota = describeQuota(profile);
+if (!authenticated) {
+  report.skip(7, "Sinalização de cota diária", "depende do login");
+} else {
+  await report.run(7, "Sinalização de cota diária", async () => {
+    await client.login(); // sessão foi descartada de propósito no passo 6
+    const profile = await client.profile();
+    const quota = describeQuota(profile);
 
-  return quota
-    ? { outcome: "PASS", detail: `cota legível no perfil${quota} (viabiliza FR-018)` }
-    : {
-        outcome: "FAIL",
-        detail: "perfil não expõe cota diária — FR-018 precisará inferi-la pela falha do download",
-      };
-});
+    return quota
+      ? { outcome: "PASS", detail: `cota legível no perfil${quota} (viabiliza FR-018)` }
+      : {
+          outcome: "FAIL",
+          detail: "perfil não expõe cota diária — FR-018 precisará inferi-la pela falha do download",
+        };
+  });
+}
 
 // -------------------------------------------------- 8. Estabilidade do domínio
 report.skip(

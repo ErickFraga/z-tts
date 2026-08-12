@@ -43,7 +43,7 @@ export class Report {
       detail = result.detail;
     } catch (error) {
       outcome = classify(error);
-      detail = error instanceof Error ? error.message : String(error);
+      detail = describeError(error);
     }
 
     const durationMs = Math.round(performance.now() - startedAt);
@@ -87,8 +87,55 @@ export class Report {
  * não integração quebrada — por isso viram BLOCKED e não FAIL.
  */
 function classify(error: unknown): Outcome {
-  if (!(error instanceof Error)) return "FAIL";
-  const message = error.message.toLowerCase();
-  const networkish = ["fetch failed", "enotfound", "econnrefused", "timeout", "etimedout"];
-  return networkish.some((needle) => message.includes(needle)) ? "BLOCKED" : "FAIL";
+  const text = describeError(error).toLowerCase();
+  const networkish = [
+    "fetch failed",
+    "enotfound",
+    "econnrefused",
+    "econnreset",
+    "timeout",
+    "etimedout",
+    "ehostunreach",
+    "enetunreach",
+    "certificate",
+    "self-signed",
+  ];
+  return networkish.some((needle) => text.includes(needle)) ? "BLOCKED" : "FAIL";
+}
+
+/**
+ * "fetch failed" sozinho não diz nada. O motivo real fica em `error.cause`,
+ * que o fetch do Node embrulha — às vezes em mais de um nível. Sem desempacotar
+ * essa cadeia é impossível distinguir DNS morto de conexão recusada, e as duas
+ * levam a conclusões opostas sobre o que fazer em seguida.
+ */
+export function describeError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+
+  const parts: string[] = [error.message];
+  let current: unknown = error.cause;
+  let depth = 0;
+
+  while (current instanceof Error && depth < 4) {
+    const code = (current as NodeJS.ErrnoException).code;
+    parts.push(code ? `${code}: ${current.message}` : current.message);
+    current = current.cause;
+    depth++;
+  }
+
+  return [...new Set(parts)].join(" ← ");
+}
+
+/** Traduz códigos de erro de rede na causa provável, em português. */
+export function explainNetworkCode(text: string): string | null {
+  const hints: Array<[RegExp, string]> = [
+    [/enotfound|eai_again/i, "o domínio não resolve em DNS — provavelmente mudou ou foi retirado do ar"],
+    [/econnrefused/i, "o domínio resolve, mas o servidor recusou a conexão"],
+    [/etimedout|timeout/i, "conexão expirou — pode ser bloqueio de rede ou provedor"],
+    [/ehostunreach|enetunreach/i, "host inalcançável a partir desta rede"],
+    [/econnreset/i, "conexão derrubada pelo outro lado — possível bloqueio ativo"],
+    [/certificate|self-signed|altname/i, "falha de certificado TLS — domínio pode estar sendo interceptado"],
+  ];
+
+  return hints.find(([pattern]) => pattern.test(text))?.[1] ?? null;
 }
