@@ -24,6 +24,8 @@ export interface Preflight {
   /** Resposta a uma requisição HTTP simples, quando houver. */
   httpStatus: number | null;
   httpError: string | null;
+  /** Método que obteve resposta. GET aqui significa que o HEAD não passou. */
+  httpVia: "HEAD" | "GET" | null;
 }
 
 export async function preflight(baseUrl: string, timeoutMs = 8000): Promise<Preflight> {
@@ -36,6 +38,7 @@ export async function preflight(baseUrl: string, timeoutMs = 8000): Promise<Pref
     tcpError: null,
     httpStatus: null,
     httpError: null,
+    httpVia: null,
   };
 
   // 1. DNS — se falhar aqui, nada adiante importa.
@@ -57,15 +60,29 @@ export async function preflight(baseUrl: string, timeoutMs = 8000): Promise<Pref
   }
 
   // 3. HTTP — completa o handshake TLS e confirma que há servidor web ali.
-  try {
-    const response = await fetch(baseUrl, {
-      method: "HEAD",
-      redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    result.httpStatus = response.status;
-  } catch (error) {
-    result.httpError = errnoOf(error);
+  //
+  // Com fallback para GET porque um HEAD malsucedido é ambíguo: pode ser o
+  // método recusado, pode ser a interferência pegando aquele handshake. Insistir
+  // uma vez pelo caminho normal separa "servidor não fala comigo" de
+  // "aquela conexão específica morreu" — distinção que custou um falso negativo
+  // no passo 0 da execução de 2026-08-12.
+  for (const method of ["HEAD", "GET"] as const) {
+    try {
+      const response = await fetch(baseUrl, {
+        method,
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      // Corpo do GET descartado sem ler: aqui só interessa o status.
+      await response.body?.cancel();
+
+      result.httpStatus = response.status;
+      result.httpVia = method;
+      result.httpError = null;
+      break;
+    } catch (error) {
+      result.httpError = errnoOf(error);
+    }
   }
 
   return result;
@@ -82,7 +99,8 @@ export function summarizePreflight(check: Preflight): string {
   if (check.httpError) {
     return `${check.host} aceita TCP mas falha no HTTP/TLS (${check.httpError})`;
   }
-  return `${check.host} → ${check.addresses[0]} · HTTP ${check.httpStatus}`;
+  const viaGet = check.httpVia === "GET" ? " (HEAD não passou)" : "";
+  return `${check.host} → ${check.addresses[0]} · HTTP ${check.httpStatus}${viaGet}`;
 }
 
 function tcpProbe(host: string, port: number, timeoutMs: number): Promise<void> {

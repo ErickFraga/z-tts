@@ -3,6 +3,7 @@
 
 # Saída do probe
 report.json
+.domains-cache.json
 downloads/
 *.epub
 

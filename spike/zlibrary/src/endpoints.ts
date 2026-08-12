@@ -12,9 +12,15 @@
  * o mapa correto dos endpoints é justamente um dos entregáveis.
  */
 
-import { KNOWN_DOMAINS } from "./domains.ts";
+import { SEED_URLS } from "./domains.ts";
 
 export const endpoints = {
+  /** GET — sonda de saúde da origem. Devolve JSON com success=1. */
+  health: "/eapi/info/ok",
+
+  /** GET — a lista de domínios publicada pela própria origem. */
+  domainList: "/eapi/info/domains/singlelogin",
+
   /** POST form-encoded com email e password. */
   login: "/eapi/user/login",
 
@@ -31,11 +37,28 @@ export const endpoints = {
   profile: "/eapi/user/profile",
 } as const;
 
+/**
+ * Cabeçalhos que o cliente do KOReader envia. Copiados de propósito: a origem
+ * responde diferente a cliente que não se identifica, e um 403 vindo daí seria
+ * lido como bloqueio de rede — erro de diagnóstico caro, com o sintoma quase
+ * idêntico ao que a Frente A investigou.
+ */
+export const USER_AGENT =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+  "Chrome/96.0.4664.110 Safari/537.36";
+
+export const DEFAULT_HEADERS: Record<string, string> = {
+  "User-Agent": USER_AGENT,
+  Accept: "application/json, text/javascript, */*; q=0.01",
+};
+
 export interface Config {
   /** Domínio em uso. A descoberta automática reescreve este campo. */
   baseUrl: string;
-  /** Candidatos da descoberta, na ordem de tentativa. O configurado vem primeiro. */
+  /** Candidatos vindos da configuração e das sementes, na ordem de tentativa. */
   domains: string[];
+  /** Quando falso, só o domínio configurado é testado. */
+  autoDiscover: boolean;
   email: string;
   password: string;
   searchTerm: string;
@@ -91,6 +114,7 @@ export function loadConfig(): Config {
   const config: Config = {
     baseUrl: "",
     domains: [],
+    autoDiscover: process.env.ZLIB_AUTO_DISCOVER?.trim() !== "0",
     email,
     password,
     searchTerm: process.env.ZLIB_SEARCH_TERM?.trim() || "Machado de Assis",
@@ -100,35 +124,39 @@ export function loadConfig(): Config {
   const check = setAndValidateBaseUrl(config, configured);
   if (!check.success) throw new Error(`ZLIB_BASE_URL: ${check.error}`);
 
-  config.domains = candidateDomains(config.baseUrl);
+  config.domains = candidateDomains(config.baseUrl, config.autoDiscover);
   return config;
+}
+
+/** Tira duplicatas preservando a ordem — a prioridade da lista é significativa. */
+export function dedupeUrls(urls: string[]): string[] {
+  const seen = new Set<string>();
+  return urls
+    .map((url) => url.trim().replace(/\/+$/, ""))
+    .filter((url) => {
+      const key = url.toLowerCase();
+      if (url.length === 0 || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 const DEFAULT_BASE_URL = "https://z-library.sk";
 
 /**
- * Monta a ordem de tentativa da descoberta.
+ * Monta a ordem de tentativa vinda da configuração.
  *
  * O domínio configurado vem sempre primeiro: descoberta é plano B, não licença
- * para trocar de origem quando o endereço escolhido está de pé. Com
- * ZLIB_AUTO_DISCOVER=0 a lista fica só com ele, que é o comportamento anterior
- * a esta integração — útil para isolar um domínio específico.
+ * para trocar de origem quando o endereço escolhido está de pé. A lista dinâmica
+ * entra depois, na descoberta — aqui só ficam as fontes que não dependem de
+ * rede. Com ZLIB_AUTO_DISCOVER=0 sobra apenas o configurado, que é o
+ * comportamento anterior a esta integração.
  */
-function candidateDomains(baseUrl: string): string[] {
-  if (process.env.ZLIB_AUTO_DISCOVER?.trim() === "0") return [baseUrl];
+function candidateDomains(baseUrl: string, autoDiscover: boolean): string[] {
+  if (!autoDiscover) return [baseUrl];
 
   const override = process.env.ZLIB_DOMAINS?.trim();
-  const extras = override
-    ? override.split(",").map((entry) => entry.trim()).filter(Boolean)
-    : [...KNOWN_DOMAINS];
+  const extras = override ? override.split(",") : [...SEED_URLS];
 
-  const seen = new Set<string>();
-  return [baseUrl, ...extras]
-    .map((url) => url.replace(/\/+$/, ""))
-    .filter((url) => {
-      const key = url.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+  return dedupeUrls([baseUrl, ...extras]);
 }

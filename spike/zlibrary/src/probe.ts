@@ -18,14 +18,26 @@ import {
   type DiscoveryResult,
 } from "./discovery.ts";
 import { cliNetworkGate, consoleUi } from "./cli.ts";
+import { installTransport, summarizeTransport, transportStats } from "./transport.ts";
 
 const config = loadConfig();
 const report = new Report();
 
+// Antes de qualquer requisição: conexão persistente e retentativa. Contra
+// interferência intermitente no handshake, é o que faz a execução sobreviver.
+const transport = installTransport();
+
 console.log(`Frente A — Integração Z-Library`);
 console.log(`Domínio configurado: ${config.baseUrl}`);
-console.log(`Candidatos:          ${config.domains.length}`);
-console.log(`Conta:               ${maskEmail(config.email)}\n`);
+console.log(
+  `Sementes:            ${config.domains.length}` +
+    `${config.autoDiscover ? " (+ lista dinâmica)" : " (descoberta desligada)"}`,
+);
+console.log(`Conta:               ${maskEmail(config.email)}`);
+console.log(
+  `Transporte:          conexão persistente ${transport.keepAliveMs / 1000}s` +
+    `${transport.proxy ? ` · proxy ${hostOf(transport.proxy)}` : ""}\n`,
+);
 
 // ------------------------------------------- 0. Pré-voo e descoberta de domínio
 // A descoberta substitui o pré-voo de domínio único: o configurado é o primeiro
@@ -41,6 +53,9 @@ await report.run(0, "Conectividade e descoberta de domínio", async () => {
     { network: cliNetworkGate, ui: consoleUi },
     {
       interactive: true,
+      // "fastest" sonda todos os candidatos e fica com o de menor latência —
+      // varredura completa, útil para mapear quais espelhos esta rede alcança.
+      mode: process.env.ZLIB_RANK_DOMAINS?.trim() === "1" ? "fastest" : "first",
       onAttempt: (attempt) =>
         console.log(`  ${attempt.usable ? "✓" : "✗"} ${attempt.summary}`),
     },
@@ -218,14 +233,23 @@ if (!authenticated) {
 }
 
 // -------------------------------------------------- 8. Estabilidade do domínio
+// A pergunta de vários dias continua sem resposta automática, mas a instabilidade
+// dentro de uma execução agora é um número, não uma impressão.
 report.skip(
   8,
   "Estabilidade do domínio",
-  "exige observação ao longo de vários dias — registrar manualmente no relatório",
+  `observação de vários dias continua manual — nesta execução: ${summarizeTransport()}`,
 );
 
 // ------------------------------------------------------------------ Resumo
 const exitCode = report.summarize();
+
+if (transportStats.retries > 0) {
+  console.log(
+    `\nA interferência custou ${transportStats.retries} retentativa(s) e foi absorvida. ` +
+      `Enquanto esse número não crescer a ponto de esgotar as tentativas, o bloqueio é ruído, não parede.`,
+  );
+}
 await writeFile(
   "report.json",
   JSON.stringify(
@@ -235,6 +259,15 @@ await writeFile(
       // Os candidatos descartados são metade do achado quando o passo 0 bloqueia:
       // dizem quantos domínios foram testados e como cada um falhou.
       descoberta: discovery,
+      // Retentativas por causa são a medida do bloqueio ao longo do tempo:
+      // comparar execuções diz se ele está afrouxando ou endurecendo.
+      transporte: {
+        proxy: transport.proxy !== null,
+        requisicoes: transportStats.requests,
+        retentativas: transportStats.retries,
+        falhas: transportStats.failed,
+        porCausa: Object.fromEntries(transportStats.byCause),
+      },
       passos: report.toJSON(),
     },
     null,
@@ -261,6 +294,15 @@ function maskEmail(email: string): string {
   const [user = "", domain = ""] = email.split("@");
   const visible = user.slice(0, 2);
   return `${visible}${"*".repeat(Math.max(user.length - 2, 3))}@${domain}`;
+}
+
+/** Só o host do proxy no cabeçalho: a URL pode carregar usuário e senha. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "configurado";
+  }
 }
 
 function truncate(text: string, max: number): string {

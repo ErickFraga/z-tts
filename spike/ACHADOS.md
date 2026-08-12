@@ -7,61 +7,70 @@ para os critérios de decisão definidos antes da execução.
 
 ## Frente A — Integração Z-Library
 
-**Status: BLOQUEADA** · medido em 2026-08-12, macOS, rede residencial no Brasil
+**Status: VIÁVEL, com rede instável** · segunda execução em 2026-08-12,
+`z-library.sk`, mesma rede residencial no Brasil
 
 ### Resultado
 
-| Estágio | Desfecho |
-|---|---|
-| Resolução DNS de `z-library.sk` | resolveu |
-| Conexão TCP na porta 443 | aceita |
-| Handshake TLS / HTTP | **ECONNRESET** |
-| Autenticação | não alcançada |
-| Busca, download, cota, sessão | não alcançados |
+| Passo | Desfecho | Tempo |
+|---|---|---|
+| 0. Conectividade | pré-voo falhou no handshake TLS | — |
+| 1. Autenticação | **PASS** — sessão via corpo da resposta | 6,3s |
+| 2. Reuso do token | BLOCKED — `UND_ERR_CONNECT_TIMEOUT` | 10,5s |
+| 3. Busca com filtros | **PASS** — 30 resultados, filtro epub respeitado, 500 no total | 8,7s |
+| 4. Paginação | **PASS** — página 2 sem repetição | 8,5s |
+| 5. Download de EPUB | **PASS** — arquivo íntegro, 620 KB | 2,6s |
+| 6. Sessão expirada | **PASS** — sem sessão devolve HTTP 400, detectável | 3,0s |
+| 7. Cota diária | **PASS** — legível no perfil, 1/10 no dia (viabiliza FR-018) | 1,1s |
+| 8. Estabilidade do domínio | pendente — exige observação de vários dias | — |
+
+Sete passos passaram. **Os endpoints de `endpoints.ts` deixaram de ser
+hipótese**: login, busca, detalhe, download e perfil foram exercitados contra a
+origem real e respondem no formato esperado.
 
 ### Interpretação
 
-A conexão TCP é estabelecida e derrubada em seguida, durante o handshake TLS.
-O padrão descarta as hipóteses simples:
+A primeira medição concluiu "bloqueio ativo por inspeção de SNI" a partir de um
+único ECONNRESET. A segunda derruba essa leitura: o mesmo domínio, na mesma
+rede, serviu login, busca, paginação e um EPUB íntegro.
 
-- servidor fora do ar produziria `ECONNREFUSED` ou falha de DNS
-- domínio extinto não resolveria
-- endpoint errado produziria HTTP 404, não reset
+O que sobrou aponta para **interferência intermitente no estabelecimento de
+conexão**, não para bloqueio:
 
-Reset após TCP aceito, no ponto exato em que o SNI é transmitido em texto
-claro, é assinatura de **bloqueio ativo por inspeção de SNI** — tipicamente no
-provedor de acesso. Não é possível confirmar a origem exata a partir do
-cliente; um firewall local ou rejeição por região produziriam o mesmo sintoma.
+- as duas falhas ocorreram ao abrir conexão nova — handshake TLS e connect
+- nenhuma se repetiu nas requisições vizinhas, feitas segundos depois
+- as latências (6 a 9 segundos por requisição) indicam caminho degradado, não
+  interrompido
+
+Bloqueio por SNI seria determinístico: derrubaria todo handshake para aquele
+host, e não haveria passo 1 nem passo 5. A leitura anterior confundiu uma
+amostra de tamanho um com uma regra.
 
 ### Consequência
 
-Nenhum dos oito passos da Frente A pôde ser validado. Os endpoints em
-`endpoints.ts` permanecem **hipóteses não verificadas** — o probe nunca chegou
-a exercitá-los.
+O plano principal está de pé. A integração é viável e o risco mudou de natureza:
+não é mais "dá para acessar?", é "quantas requisições se perdem no caminho e o
+que o app faz com elas".
 
-Contornar o bloqueio está fora do escopo do spike por decisão registrada antes
-da execução (§19, "Fora do escopo do spike").
+Isso é requisito de produto, não obstáculo: um leitor que sincroniza em rede
+degradada precisa de retentativa e de troca de domínio de qualquer forma. O
+probe passou a fazer as duas (ver README, "Descoberta de domínio" e
+"Transporte"), e a contar quantas retentativas cada execução custou — esse
+número é a medida a acompanhar entre execuções.
 
-### Medição pendente
+### O que continua em aberto
 
-Esta medição testou **um único domínio**, e um domínio só não distingue
-"bloqueio dirigido a `z-library.sk`" de "bloqueio à origem inteira". A diferença
-importa: no primeiro caso outro endereço resolve, no segundo nenhum resolve.
-
-O probe passou a percorrer uma lista de candidatos no passo 0 (ver
-`zlibrary/src/domains.ts`). **Ainda não foi executado** com essa mudança — a
-tabela acima continua valendo apenas para `z-library.sk`. A recomendação abaixo
-não muda enquanto essa segunda execução não trouxer um domínio que responda.
+- **Estabilidade do domínio ao longo de dias** — o passo 8 segue manual.
+- **Cota de 10 downloads por dia** — pesa sobre FR-018 e sobre qualquer
+  expectativa de uso intenso.
+- **Reprodutibilidade em outras redes** — duas execuções, uma rede, um dia.
 
 ### Recomendação
 
-Acionar o plano alternativo já previsto: **o app deixa de baixar livros e passa
-a recebê-los por importação manual**, permanecendo leitor e narrador. As seções
-4.2 a 4.4 da especificação saem do escopo; o restante sobrevive intacto.
-
-Essa versão do produto não depende de nenhuma fonte externa, o que elimina de
-uma vez o maior risco técnico do projeto, a restrição de distribuição em loja e
-toda a superfície de credenciais.
+Seguir com o plano principal, mantendo a importação manual de EPUB como
+funcionalidade — não como plano alternativo. Ela custa pouco, cobre a cota
+diária esgotada, a rede pior que esta e o dia em que a origem mudar de endereço
+sem avisar.
 
 ---
 
@@ -72,10 +81,9 @@ toda a superfície de credenciais.
 Depende de macOS com Xcode e iPhone físico. O código está escrito e nunca foi
 compilado.
 
-Continua sendo **a frente decisiva**: o RTF determina se a arquitetura de
-streaming de FR-039 sobrevive. O bloqueio da Frente A não a afeta — a narração
-local é independente da origem dos livros e, com o novo escopo proposto, passa
-a ser o núcleo do produto em vez de um complemento.
+Continua sendo **a frente decisiva**, e agora é a única em aberto: o RTF
+determina se a arquitetura de streaming de FR-039 sobrevive. Com a Frente A
+viável, ela volta a ser o gargalo único do plano principal.
 
 ---
 
@@ -83,6 +91,7 @@ a ser o núcleo do produto em vez de um complemento.
 
 | Pergunta | Respondida? |
 |---|---|
-| Dá para baixar da Z-Library? | Não por `z-library.sk`, a partir desta rede |
-| Algum outro domínio da origem responde? | **Em aberto — descoberta implementada, não executada** |
+| Dá para baixar da Z-Library? | **Sim** — EPUB íntegro por `z-library.sk` |
+| A rede atrapalha? | Sim, de forma intermitente — absorvido por retentativa |
+| O domínio se mantém? | Em aberto — exige observação de vários dias |
 | O Piper roda rápido o bastante no iPhone? | **Em aberto — próxima medição** |

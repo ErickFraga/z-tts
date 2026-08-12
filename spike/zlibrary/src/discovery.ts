@@ -1,43 +1,69 @@
 /**
  * Descoberta automática do domínio da Z-Library.
  *
- * A Frente A parou no passo 0 com um único domínio testado, e um único domínio
- * não distingue as duas causas possíveis: o endereço morreu, ou esta rede
- * bloqueia esse endereço. As consequências são opostas — a primeira se resolve
- * trocando de domínio, a segunda não se resolve do lado do código.
+ * Réplica do que o cliente do KOReader faz (`Discovery.run` + `Api.healthCheck`
+ * + `Api.fetchDynamicDomains`), adaptada ao probe. Quatro decisões vêm de lá e
+ * cada uma resolve um problema concreto:
  *
- * Percorrer vários candidatos separa as duas. Se algum responde, o anterior
- * estava individualmente morto ou bloqueado; se nenhum responde, a barreira é
- * da rede e vale para toda a origem. Em ambos os casos o relatório passa a
- * dizer o que foi tentado, e não apenas que falhou.
+ * 1. A lista de candidatos é buscada de um CDN, não fixada no código. Domínio
+ *    da Z-Library é alvo móvel; e o CDN responde mesmo quando a origem inteira
+ *    está inalcançável, então dá para saber os endereços novos sem depender de
+ *    falar com nenhum deles.
  *
- * O desenho segue o cliente do KOReader (`Zlibrary:autoDiscoverAndSetBaseUrl`,
- * que delega para `Discovery.run`): checar a rede, procurar um domínio que
- * responda, validar e gravar. As dependências entram por parâmetro porque no
- * app "interface" será tela e "rede" será o estado do sistema — aqui são
- * console e DNS, e a lógica no meio é a mesma.
+ * 2. Os candidatos são sondados em paralelo, três de cada vez. Com bloqueio
+ *    intermitente, sondar em série multiplica o tempo de espera pelo número de
+ *    domínios mortos antes de chegar ao vivo.
+ *
+ * 3. Quem decide é `/eapi/info/ok`, a sonda da própria origem, exigindo JSON com
+ *    success=1. Status HTTP sozinho não basta: domínio estacionado devolve 200
+ *    com HTML, e portal de operadora devolve 200 com página de aviso.
+ *
+ * 4. Redirecionamento para outro host é adotado como novo domínio. É a origem
+ *    dizendo para onde mudou, e ignorar isso descartaria um endereço bom.
+ *
+ * A rede e a interface entram por parâmetro: no app serão o estado do sistema e
+ * a tela, aqui são DNS e console, e a lógica no meio é a mesma.
  */
 
-import { preflight, summarizePreflight, type Preflight } from "./preflight.ts";
-import { setAndValidateBaseUrl, type Config } from "./endpoints.ts";
+import { readFile, writeFile } from "node:fs/promises";
+import {
+  DEFAULT_HEADERS,
+  dedupeUrls,
+  endpoints,
+  setAndValidateBaseUrl,
+  type Config,
+} from "./endpoints.ts";
+import {
+  DOMAIN_CACHE_FILE,
+  DOMAIN_CACHE_TTL_MS,
+  DOMAIN_LIST_SOURCES,
+  parseDomainList,
+} from "./domains.ts";
 import { describeError, explainNetworkCode } from "./report.ts";
+import { resilientFetch } from "./transport.ts";
 
 export interface DiscoveryAttempt {
   url: string;
-  /** Respondeu a ponto de valer a pena tentar a API. */
+  /** Respondeu à sonda de saúde falando o protocolo esperado. */
   usable: boolean;
-  /** Uma linha legível com o que aconteceu — vem do pré-voo. */
+  /** Uma linha legível com o que aconteceu. */
   summary: string;
-  /** Causa provável em português, quando o código de erro permite deduzir. */
+  /** Causa provável em português, quando dá para deduzir. */
   cause: string | null;
+  /** Tempo até a resposta — usado para escolher o mais rápido, quando pedido. */
+  elapsedMs: number;
+  /** Destino, quando a origem redirecionou para outro host. */
+  redirectedTo: string | null;
 }
 
 export interface DiscoveryResult {
   success: boolean;
   url?: string;
   error?: string;
-  /** Todos os candidatos percorridos, na ordem — o valor diagnóstico está aqui. */
+  /** Todos os candidatos sondados — o valor diagnóstico está aqui. */
   attempts: DiscoveryAttempt[];
+  /** Quantos domínios a lista dinâmica acrescentou, e de onde veio. */
+  domainList?: { source: string; added: number; cached: boolean };
 }
 
 /**
@@ -45,9 +71,8 @@ export interface DiscoveryResult {
  * responde se a tentativa deve ser adiada por falta de rede.
  *
  * Assíncrono porque em Node não existe estado de conectividade pronto para
- * consultar — descobrir isso custa uma ida à rede. O `retry` só é usado por
- * implementações capazes de agendar (o app); num processo de linha de comando
- * não há o que agendar, e o adiamento vira orientação para rodar de novo.
+ * consultar. O `retry` só é usado por implementações capazes de agendar (o
+ * app); num processo de linha de comando não há o que agendar.
  */
 export interface NetworkGate {
   shouldWaitForNetwork(retry: () => void): Promise<boolean>;
@@ -71,32 +96,57 @@ export interface DiscoveryOptions {
   interactive?: boolean;
   /** Repassado ao porteiro de rede, para quem souber reagendar. */
   retryCallback?: () => void;
-  /** Chamado a cada candidato, para acompanhar a varredura em tempo real. */
+  /** Chamado a cada candidato sondado, para acompanhar a varredura. */
   onAttempt?: (attempt: DiscoveryAttempt) => void;
+  /**
+   * "first" para no primeiro que responder — mantém a prioridade da lista.
+   * "fastest" sonda todos e fica com o de menor latência.
+   */
+  mode?: "first" | "fastest";
+  concurrency?: number;
   timeoutMs?: number;
 }
 
+const CONCURRENCY = 3;
+const HEALTH_TIMEOUT_MS = 10_000;
+
 /**
- * Tenta, em sequência, os domínios conhecidos até achar um que responda.
+ * Sonda os candidatos até um responder — em lotes paralelos, na ordem da lista.
  *
- * "Responder" aqui é o pré-voo completo: DNS resolve, a porta 443 aceita
- * conexão e o handshake HTTP/TLS termina. É deliberadamente mais fraco que
- * "é mesmo uma Z-Library" — confirmar isso exige credencial e é trabalho dos
- * passos seguintes do probe. Mas é forte o bastante para descartar o que não
- * tem chance, que é o que a descoberta precisa fazer.
+ * O lote preserva a prioridade: dentro de um lote de três, se dois responderem,
+ * vence o que vier antes na lista, não o que chegar antes na rede. Isso é o que
+ * mantém o domínio configurado com precedência sobre as sementes.
  */
 export async function findWorkingBaseUrl(
   domains: readonly string[],
-  options: { onAttempt?: (attempt: DiscoveryAttempt) => void; timeoutMs?: number } = {},
+  options: Pick<DiscoveryOptions, "onAttempt" | "mode" | "concurrency" | "timeoutMs"> = {},
 ): Promise<DiscoveryResult> {
+  const concurrency = Math.max(1, options.concurrency ?? CONCURRENCY);
+  const mode = options.mode ?? "first";
   const attempts: DiscoveryAttempt[] = [];
 
-  for (const url of domains) {
-    const attempt = await probeDomain(url, options.timeoutMs);
-    attempts.push(attempt);
-    options.onAttempt?.(attempt);
+  for (let start = 0; start < domains.length; start += concurrency) {
+    const batch = domains.slice(start, start + concurrency);
+    const results = await Promise.all(batch.map((url) => probeDomain(url, options.timeoutMs)));
 
-    if (attempt.usable) return { success: true, url, attempts };
+    for (const attempt of results) {
+      attempts.push(attempt);
+      options.onAttempt?.(attempt);
+    }
+
+    const winner = results.find((attempt) => attempt.usable);
+    if (winner && mode === "first") {
+      return { success: true, url: winner.redirectedTo ?? winner.url, attempts };
+    }
+  }
+
+  // Modo "fastest": sondou tudo, agora escolhe pela latência medida.
+  const usable = attempts.filter((attempt) => attempt.usable);
+  if (usable.length > 0) {
+    const quickest = usable.reduce((best, current) =>
+      current.elapsedMs < best.elapsedMs ? current : best,
+    );
+    return { success: true, url: quickest.redirectedTo ?? quickest.url, attempts };
   }
 
   return {
@@ -104,7 +154,9 @@ export async function findWorkingBaseUrl(
     error:
       attempts.length === 0
         ? "Nenhum domínio candidato configurado."
-        : `Nenhum dos ${attempts.length} domínios respondeu.`,
+        : attempts.length === 1
+          ? "O único domínio candidato não respondeu."
+          : `Nenhum dos ${attempts.length} domínios respondeu.`,
     attempts,
   };
 }
@@ -120,12 +172,11 @@ export async function autoDiscoverAndSetBaseUrl(
   deps: DiscoveryDeps,
   options: DiscoveryOptions = {},
 ): Promise<DiscoveryResult> {
-  const { interactive = false, retryCallback, onAttempt, timeoutMs } = options;
+  const { interactive = false, retryCallback } = options;
 
-  // Sem rede, varrer a lista inteira só produz sete vezes o mesmo erro e
-  // esconde a causa real. Quem souber reagendar refaz a varredura quando a
-  // conexão voltar, e só então avisa o chamador — que quase sempre quer
-  // retomar o que ia fazer com o domínio já definido.
+  // Sem rede, varrer a lista inteira só produz o mesmo erro repetido e esconde
+  // a causa real. Quem souber reagendar refaz a varredura quando a conexão
+  // voltar, e só então avisa o chamador.
   const waiting = await deps.network.shouldWaitForNetwork(async () => {
     const retried = await autoDiscoverAndSetBaseUrl(config, deps, options);
     if (retried.success) retryCallback?.();
@@ -142,32 +193,56 @@ export async function autoDiscoverAndSetBaseUrl(
     : undefined;
 
   try {
-    const result = await findWorkingBaseUrl(config.domains, { onAttempt, timeoutMs });
+    // A lista dinâmica entra depois do domínio configurado e antes das sementes:
+    // é mais nova que elas e menos autoritativa que a escolha de quem rodou.
+    const dynamic = config.autoDiscover ? await loadDomainList() : null;
+    const candidates = dedupeUrls([
+      config.domains[0] ?? config.baseUrl,
+      ...(dynamic?.domains ?? []),
+      ...config.domains.slice(1),
+    ]);
 
-    if (result.success && result.url) {
-      const { success, error } = setAndValidateBaseUrl(config, result.url);
+    if (interactive && dynamic && dynamic.domains.length > 0) {
+      deps.ui.showInfoMessage(
+        `Lista dinâmica: ${dynamic.domains.length} domínio(s) de ${dynamic.source}` +
+          `${dynamic.cached ? " (em cache)" : ""}`,
+      );
+    }
+
+    const result = await findWorkingBaseUrl(candidates, options);
+    const withList: DiscoveryResult = {
+      ...result,
+      domainList: dynamic
+        ? {
+            source: dynamic.source,
+            added: candidates.length - config.domains.length,
+            cached: dynamic.cached,
+          }
+        : undefined,
+    };
+
+    if (withList.success && withList.url) {
+      const { success, error } = setAndValidateBaseUrl(config, withList.url);
 
       if (success) {
         if (loading !== undefined) deps.ui.closeMessage(loading);
         if (interactive) deps.ui.showInfoMessage(`Domínio em uso: ${config.baseUrl}`);
-        return { ...result, url: config.baseUrl };
+        return { ...withList, url: config.baseUrl };
       }
 
       if (loading !== undefined) deps.ui.closeMessage(loading);
       const message = error ?? "URL base inválida.";
       if (interactive) deps.ui.showErrorMessage(message);
-      return { ...result, success: false, url: undefined, error: message };
+      return { ...withList, success: false, url: undefined, error: message };
     }
 
     if (loading !== undefined) deps.ui.closeMessage(loading);
-    if (interactive) {
-      deps.ui.showErrorMessage(result.error ?? "Nenhum domínio respondeu.");
-    }
-    return result;
+    if (interactive) deps.ui.showErrorMessage(withList.error ?? "Nenhum domínio respondeu.");
+    return withList;
   } catch (error) {
-    // Rede não deveria chegar aqui: o pré-voo captura os erros dele e devolve
-    // um resultado. O que sobra é defeito de programação, e engolir isso como
-    // "domínio inalcançável" mandaria o spike investigar a rede à toa.
+    // Falha de rede não chega aqui: a sonda captura a dela e devolve resultado.
+    // O que sobra é defeito de programação, e engolir isso como "domínio
+    // inalcançável" mandaria o spike investigar a rede à toa.
     if (loading !== undefined) deps.ui.closeMessage(loading);
     const message = describeError(error);
     if (interactive) deps.ui.showErrorMessage(`Erro durante a descoberta: ${message}`);
@@ -181,13 +256,14 @@ export function summarizeDiscovery(result: DiscoveryResult): string {
 
   if (result.success && chosen) {
     const discarded = result.attempts.length - 1;
-    return discarded === 0
-      ? `${chosen.summary} — domínio configurado respondeu de primeira`
-      : `${chosen.summary} — escolhido após ${discarded} domínio(s) descartado(s)`;
+    const scale = discarded === 0
+      ? "primeiro candidato"
+      : `escolhido após ${discarded} descartado(s)`;
+    return `${chosen.summary} — ${scale}`;
   }
 
-  // Falhas agrupadas por causa: sete domínios mortos pelo mesmo motivo é um
-  // fato só, e repeti-lo sete vezes esconde o candidato que falhou por outro.
+  // Falhas agrupadas por causa: vinte domínios mortos pelo mesmo motivo é um
+  // fato só, e repeti-lo vinte vezes esconde o que falhou por outro.
   const byCause = new Map<string, string[]>();
   for (const attempt of result.attempts) {
     const cause = attempt.cause ?? attempt.summary;
@@ -195,46 +271,210 @@ export function summarizeDiscovery(result: DiscoveryResult): string {
   }
 
   const failures = [...byCause]
-    .map(([cause, hosts]) => `${hosts.join(", ")} — ${cause}`)
+    .map(([cause, hosts]) => `${hosts.length}× ${cause} (${hosts.slice(0, 3).join(", ")}…)`)
     .join(" · ");
 
   return failures ? `${result.error} ${failures}` : (result.error ?? "descoberta não executada");
 }
 
 /**
- * Um candidato só é aproveitável se o handshake terminar. O caso que motivou
- * esta lista — TCP aceito e conexão derrubada no TLS — passa nas duas primeiras
- * checagens do pré-voo e falha na terceira, então checar só DNS e porta daria
- * o domínio como bom e empurraria a falha para o passo de autenticação, onde
- * ela é bem mais difícil de ler.
+ * Pergunta à origem se está de pé, com o mesmo critério do plugin: 2xx, corpo
+ * não vazio, JSON legível e `success = 1`.
  *
- * 5xx também desqualifica: servidor de pé mas quebrado não serve para o probe.
- * Qualquer outro status vale, inclusive 403 e 405 — recusar HEAD ou exigir
- * sessão são respostas de um servidor vivo.
+ * O critério estrito é o que separa "servidor vivo" de "alguma coisa
+ * respondeu". Página de domínio estacionado, portal de autenticação de rede e
+ * erro de CDN devolvem 200 com HTML, e qualquer um deles passaria por uma
+ * checagem baseada só em status.
  */
 async function probeDomain(url: string, timeoutMs?: number): Promise<DiscoveryAttempt> {
-  const check: Preflight = await preflight(url, timeoutMs);
-  const summary = summarizePreflight(check);
+  const startedAt = performance.now();
 
-  const usable =
-    check.addresses.length > 0 &&
-    check.tcpReachable &&
-    check.httpError === null &&
-    check.httpStatus !== null &&
-    check.httpStatus < 500;
-
-  const failureCode = check.dnsError ?? check.tcpError ?? check.httpError;
-
-  return {
+  const attempt = (extra: Partial<DiscoveryAttempt>): DiscoveryAttempt => ({
     url,
-    usable,
-    summary,
-    cause: usable
-      ? null
-      : failureCode
-        ? (explainNetworkCode(failureCode) ?? failureCode)
-        : `servidor respondeu HTTP ${check.httpStatus}`,
-  };
+    usable: false,
+    summary: `${hostOf(url)}: ${extra.cause ?? "sem resposta"}`,
+    cause: null,
+    elapsedMs: Math.round(performance.now() - startedAt),
+    redirectedTo: null,
+    ...extra,
+  });
+
+  try {
+    const response = await resilientFetch(
+      `${url}${endpoints.health}`,
+      { headers: DEFAULT_HEADERS, redirect: "follow" },
+      // Duas tentativas, não as quatro do resto do probe: aqui a lista inteira
+      // está em jogo e insistir em um candidato morto atrasa a chegada ao vivo.
+      { attempts: 2, timeoutMs: timeoutMs ?? HEALTH_TIMEOUT_MS, label: hostOf(url) },
+    );
+
+    // A origem redireciona para o espelho atual quando o domínio pedido saiu de
+    // circulação. É informação de primeira mão sobre onde ela está agora.
+    const landed = originOf(response.url);
+    const redirectedTo = landed && landed !== url ? landed : null;
+
+    const body = await response.text();
+    const elapsedMs = Math.round(performance.now() - startedAt);
+
+    if (!response.ok) {
+      // 404 aqui é ambíguo: pode ser espelho sem essa sonda, não espelho morto.
+      // Descartar por isso derrubaria um domínio que atende a API inteira — o
+      // risco é real, porque a execução de 2026-08-12 provou que z-library.sk
+      // serve login, busca e download.
+      if (response.status === 404) {
+        const legacy = await probeLegacy(url, timeoutMs);
+        if (legacy) {
+          return attempt({
+            usable: true,
+            summary: `${hostOf(url)} respondeu pela API (sem ${endpoints.health})`,
+            elapsedMs: Math.round(performance.now() - startedAt),
+            redirectedTo,
+          });
+        }
+      }
+
+      return attempt({ cause: `HTTP ${response.status}`, elapsedMs, redirectedTo });
+    }
+
+    const payload = safeJson(body);
+    if (payload === null) {
+      return attempt({
+        cause: body.trimStart().startsWith("<")
+          ? "responde HTML onde a API devolveria JSON — domínio estacionado ou portal de rede"
+          : "resposta não é JSON",
+        elapsedMs,
+        redirectedTo,
+      });
+    }
+
+    if (Number((payload as Record<string, unknown>).success) !== 1) {
+      return attempt({ cause: "API respondeu sem success=1", elapsedMs, redirectedTo });
+    }
+
+    const destination = redirectedTo ?? url;
+    return attempt({
+      usable: true,
+      summary: `${hostOf(destination)} respondeu em ${elapsedMs}ms` +
+        `${redirectedTo ? ` (redirecionado de ${hostOf(url)})` : ""}`,
+      cause: null,
+      elapsedMs,
+      redirectedTo,
+    });
+  } catch (error) {
+    const message = describeError(error);
+    return attempt({ cause: explainNetworkCode(message) ?? shorten(message) });
+  }
+}
+
+/**
+ * Segunda opinião para espelhos sem a sonda de saúde: bate no perfil sem sessão.
+ *
+ * Sem credencial a origem devolve erro de aplicação — foi HTTP 400 na execução
+ * de 2026-08-12 — e é isso que se quer ver. Qualquer JSON aqui prova que há API
+ * do outro lado; o status não importa, só o formato da resposta.
+ */
+async function probeLegacy(url: string, timeoutMs?: number): Promise<boolean> {
+  try {
+    const response = await resilientFetch(
+      `${url}${endpoints.profile}`,
+      { headers: DEFAULT_HEADERS },
+      { attempts: 1, timeoutMs: timeoutMs ?? HEALTH_TIMEOUT_MS, label: hostOf(url) },
+    );
+    return safeJson(await response.text()) !== null;
+  } catch {
+    return false;
+  }
+}
+
+interface DomainList {
+  domains: string[];
+  source: string;
+  cached: boolean;
+}
+
+/**
+ * Traz a lista dinâmica: cache em disco enquanto válido, senão os espelhos em
+ * rodízio.
+ *
+ * Falhar aqui não é fatal — as sementes continuam valendo. Por isso a função
+ * nunca lança: uma lista velha é pior que uma nova, e as duas são melhores que
+ * interromper a descoberta.
+ */
+async function loadDomainList(): Promise<DomainList | null> {
+  const cached = await readDomainCache();
+  if (cached) return cached;
+
+  for (const source of DOMAIN_LIST_SOURCES) {
+    try {
+      const response = await resilientFetch(
+        source,
+        { headers: DEFAULT_HEADERS },
+        // Uma tentativa por espelho: o rodízio já é a retentativa, e com outra
+        // rota. Repetir na mesma fonte bloqueada só gasta tempo.
+        { attempts: 1, timeoutMs: 8000, label: hostOf(source) },
+      );
+      if (!response.ok) continue;
+
+      const domains = parseDomainList(safeJson(await response.text()));
+      if (domains.length === 0) continue;
+
+      await writeDomainCache(domains, source);
+      return { domains, source: hostOf(source), cached: false };
+    } catch {
+      // Espelho fora do ar ou bloqueado: o próximo do rodízio assume.
+    }
+  }
+
+  return null;
+}
+
+async function readDomainCache(): Promise<DomainList | null> {
+  try {
+    const raw = JSON.parse(await readFile(DOMAIN_CACHE_FILE, "utf8")) as {
+      fetchedAt?: number;
+      source?: string;
+      domains?: unknown;
+    };
+
+    const age = Date.now() - (raw.fetchedAt ?? 0);
+    if (age > DOMAIN_CACHE_TTL_MS || !Array.isArray(raw.domains)) return null;
+
+    const domains = raw.domains.filter((entry): entry is string => typeof entry === "string");
+    return domains.length > 0
+      ? { domains, source: raw.source ?? "cache", cached: true }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeDomainCache(domains: string[], source: string): Promise<void> {
+  try {
+    await writeFile(
+      DOMAIN_CACHE_FILE,
+      JSON.stringify({ fetchedAt: Date.now(), source: hostOf(source), domains }, null, 2),
+    );
+  } catch {
+    // Cache é otimização; disco cheio ou somente leitura não derruba a descoberta.
+  }
+}
+
+function safeJson(text: string): unknown {
+  if (text.trim().length === 0) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/** Só esquema e host: o resto da URL de resposta não serve como URL base. */
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
 }
 
 function hostOf(url: string): string {
@@ -243,4 +483,8 @@ function hostOf(url: string): string {
   } catch {
     return url;
   }
+}
+
+function shorten(text: string): string {
+  return text.length <= 60 ? text : `${text.slice(0, 59)}…`;
 }

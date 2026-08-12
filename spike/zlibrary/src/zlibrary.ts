@@ -5,7 +5,8 @@
  * objetivo é descobrir se o protocolo funciona, não construir uma biblioteca.
  */
 
-import { endpoints, type Config } from "./endpoints.ts";
+import { DEFAULT_HEADERS, endpoints, type Config } from "./endpoints.ts";
+import { resilientFetch } from "./transport.ts";
 
 export interface SearchResult {
   id: string;
@@ -78,11 +79,20 @@ export class ZLibraryClient {
 
   private async request(path: string, init: RequestInit = {}): Promise<Response> {
     const url = `${this.config.baseUrl}${path}`;
-    const headers = new Headers(init.headers);
-    headers.set("Accept", "application/json");
+    // Os cabeçalhos padrão identificam o cliente como o do KOReader. A origem
+    // trata requisição anônima de forma diferente, e um 403 vindo daí seria
+    // confundido com bloqueio de rede.
+    const headers = new Headers({ ...DEFAULT_HEADERS, ...headersOf(init.headers) });
     if (this.cookies.size > 0) headers.set("Cookie", this.cookieHeader);
 
-    const response = await fetch(url, { ...init, headers, redirect: "follow" });
+    // A retentativa só é segura porque todo corpo daqui é URLSearchParams, que
+    // se serializa de novo a cada tentativa. Um corpo em stream não sobreviveria
+    // à segunda — se algum dia entrar um, precisa ser recriado por tentativa.
+    const response = await resilientFetch(
+      url,
+      { ...init, headers, redirect: "follow" },
+      { label: path },
+    );
     this.captureCookies(response);
 
     if (!response.ok) {
@@ -115,7 +125,11 @@ export class ZLibraryClient {
     const response = await this.request(endpoints.login, {
       method: "POST",
       body,
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        // Só no login, como o cliente do KOReader faz.
+        "X-Requested-With": "XMLHttpRequest",
+      },
     });
 
     const cookiesBefore = this.cookies.size;
@@ -226,16 +240,29 @@ export class ZLibraryClient {
   /** Baixa um arquivo e devolve os bytes crus, sem gravar em disco. */
   async download(url: string): Promise<Uint8Array> {
     const absolute = url.startsWith("http") ? url : `${this.config.baseUrl}${url}`;
-    const response = await fetch(absolute, {
-      headers: this.cookies.size > 0 ? { Cookie: this.cookieHeader } : {},
-      redirect: "follow",
-    });
+    const response = await resilientFetch(
+      absolute,
+      {
+        headers: this.cookies.size > 0
+          ? { ...DEFAULT_HEADERS, Cookie: this.cookieHeader }
+          : DEFAULT_HEADERS,
+        redirect: "follow",
+      },
+      // Um download interrompido no meio conta como tentativa perdida: sem
+      // requisição de intervalo, recomeçar é a única saída.
+      { label: "download" },
+    );
 
     if (!response.ok) {
       throw new HttpError(response.status, await safeText(response), absolute);
     }
     return new Uint8Array(await response.arrayBuffer());
   }
+}
+
+/** Normaliza os três formatos que HeadersInit aceita para um objeto simples. */
+function headersOf(init: RequestInit["headers"]): Record<string, string> {
+  return init ? Object.fromEntries(new Headers(init)) : {};
 }
 
 function toSearchResult(book: Record<string, unknown>): SearchResult {

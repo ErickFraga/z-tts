@@ -47,20 +47,59 @@ nem impressas no relatório. O `.gitignore` cobre `.env` e os arquivos baixados.
 
 ### Descoberta de domínio
 
-O passo 0 não testa mais um domínio só. Percorre uma lista de candidatos —
-`ZLIB_BASE_URL` primeiro, depois os de `zlibrary/src/domains.ts` — e adota o
-primeiro que complete DNS, TCP e handshake TLS. O domínio escolhido vale para
-todos os passos seguintes.
+O passo 0 não testa mais um domínio só. Monta a lista de candidatos nesta ordem
+e adota o primeiro que responder:
 
-Isso existe porque um domínio único não distingue as duas causas possíveis de
-falha no passo 0: o endereço morreu, ou esta rede bloqueia esse endereço. A
-primeira se resolve trocando de domínio; a segunda não se resolve pelo código.
-Com vários candidatos, o resultado responde qual das duas é: se nenhum
-responde, e a rede está de pé, a barreira é dirigida à origem.
+1. `ZLIB_BASE_URL` — a escolha de quem rodou vem sempre primeiro
+2. a **lista dinâmica**, buscada de um CDN e guardada por 10 minutos
+3. as sementes de `zlibrary/src/domains.ts`
 
-Os candidatos descartados vão para o `report.json` com o motivo de cada um —
-saber quais domínios ainda respondem é, em si, um achado do spike.
+A lista dinâmica é a peça que faz isso durar. Domínio da Z-Library é alvo móvel,
+e qualquer lista fixa envelhece — inclusive a que está no código. Buscá-la de um
+CDN funciona justamente quando a origem inteira está inalcançável: o CDN não é
+alvo do bloqueio, então dá para aprender os endereços novos sem conseguir falar
+com nenhum deles ainda. São três espelhos, tentados em rodízio.
+
+A sonda é `/eapi/info/ok`, da própria origem, e só conta como viva a resposta
+2xx com JSON contendo `success=1`. Status HTTP sozinho não serve: domínio
+estacionado e portal de autenticação de rede devolvem 200 com HTML, e ambos
+passariam. Quem responde 404 nessa sonda ganha segunda chance no endpoint de
+perfil — espelho antigo sem a sonda não deve ser descartado.
+
+Redirecionamento para outro host é adotado como domínio novo: é a origem
+dizendo para onde mudou.
+
+Os candidatos são sondados **três de cada vez**, e a prioridade da lista vence
+dentro do lote — dois respondendo, fica o que vier antes. Com
+`ZLIB_RANK_DOMAINS=1` a varredura é completa e o escolhido é o de menor
+latência, útil para mapear quais espelhos esta rede alcança.
+
+Tudo isso vai para o `report.json` com o motivo de cada descarte.
 `ZLIB_AUTO_DISCOVER=0` volta ao comportamento de domínio único.
+
+Referência: o cliente do KOReader
+([`zlibrary.koplugin`](https://github.com/ZlibraryKO/zlibrary.koplugin)), de
+onde vêm as sementes, o endpoint de saúde, o formato da lista dinâmica e a
+concorrência de três.
+
+### Transporte
+
+Toda requisição passa por uma camada com conexão persistente e retentativa. Ela
+existe por causa da segunda execução, que mostrou interferência intermitente ao
+**abrir conexão** — e não bloqueio (ver ACHADOS.md).
+
+- **Conexão persistente por 60s.** É o que mais pesa: menos handshakes por
+  execução significa menos exposição ao ponto onde as conexões morriam.
+- **Retentativa com espera crescente e ruído**, só para erros de conexão e para
+  429/502/503/504 — casos em que a requisição comprovadamente não foi
+  processada. `ENOTFOUND` e `ECONNREFUSED` não são repetidos: são respostas
+  determinísticas, e insistir só atrasa a queda para o próximo domínio.
+- **Contagem por causa**, no resumo e no `report.json`. Comparar execuções diz
+  se a interferência está afrouxando ou endurecendo — que é a informação de
+  decisão, não o sintoma isolado.
+
+`ZLIB_RETRIES` ajusta as tentativas; `ZLIB_PROXY` roteia tudo por um proxy de
+quem roda. O spike não escolhe nem embute rota alternativa.
 
 ### O que o probe faz
 
@@ -76,10 +115,15 @@ esbarrou em CAPTCHA, limite de requisições ou domínio fora do ar. O spike
 
 Não faz parte deste spike contornar CAPTCHA ou driblar limites de requisição.
 
-A descoberta de domínio fica **dentro** do escopo: tentar endereços públicos
-conhecidos em ordem é diagnóstico, e sem ela o passo 0 não consegue separar
-domínio morto de bloqueio de rede. Contornar o bloqueio depois de identificado
-— proxy, VPN, DNS alternativo — continua fora.
+Descoberta de domínio e retentativa ficam **dentro** do escopo: são a resposta
+correta ao que foi medido — endereço móvel e conexão instável — e nenhuma das
+duas esconde, forja ou disfarça tráfego. Se o bloqueio endurecer para
+determinístico, a retentativa falha rápido e o relatório mostra isso, que é a
+informação certa para decidir.
+
+Rota alternativa — VPN, DNS criptografado, proxy remoto — continua fora. A
+variável `ZLIB_PROXY` existe para quem já tem a sua e quer usá-la; o spike não
+provê nem recomenda nenhuma.
 
 ---
 
