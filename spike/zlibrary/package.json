@@ -1,0 +1,18 @@
+{
+  "name": "spike-zlibrary",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Spike descartável — valida autenticação, busca e download da Z-Library em TypeScript",
+  "scripts": {
+    "probe": "node --experimental-strip-types --env-file=.env src/probe.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  }
+}

@@ -1,0 +1,10 @@
+# Credenciais — jamais versionar
+.env
+
+# Saída do probe
+report.json
+downloads/
+*.epub
+
+# Dependências
+node_modules/
