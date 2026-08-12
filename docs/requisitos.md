@@ -1,6 +1,7 @@
 # Especificação de Requisitos — z-tts
 
 > Status: **aguardando aprovação**. Nenhuma implementação deve começar antes da validação deste documento.
+> Todas as questões abertas foram respondidas; o próximo passo é o spike técnico descrito na §19.
 > Última atualização: 2026-08-02
 
 ---
@@ -82,7 +83,7 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 ### 4.3 Busca
 
 - **FR-007** — O app deve oferecer busca por texto livre, aplicada a título e autor.
-- **FR-008** — A busca deve oferecer filtros de idioma, formato e ano de publicação. O filtro de formato inicia fixado em EPUB.
+- **FR-008** — A busca deve oferecer filtros de idioma, formato e ano de publicação. O filtro de formato inicia fixado em EPUB e o de idioma inicia pré-ajustado em português, coerente com o catálogo de vozes (FR-077), evitando que o usuário baixe livros que não conseguirá ouvir. Ambos permanecem alteráveis pelo usuário.
 - **FR-009** — Cada resultado deve exibir capa (quando disponível), título, autor, idioma, formato, tamanho do arquivo e ano.
 - **FR-010** — Os resultados devem ser paginados, carregando a página seguinte quando o usuário atinge o fim da lista.
 - **FR-011** — Resultados em formato diferente de EPUB não devem ser oferecidos para download.
@@ -270,7 +271,7 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 | EC-30 | Livro em idioma sem voz disponível no catálogo | Narração indisponível; o app explica que não há voz para aquele idioma, em vez de narrar com voz incompatível |
 | EC-31 | Passo de coach mark cujo elemento não está em tela | Passo omitido, sequência continua sem recorte vazio (FR-075) |
 | EC-32 | Rotação de tela ou mudança de tamanho durante um coach mark | Recorte e balão se reposicionam sobre o elemento correto |
-| EC-33 | Certificado de assinatura expirado no iOS | O app deixa de abrir até ser reassinado — limitação de plataforma, não tratável em código |
+| EC-33 | Certificado de assinatura expirado no iOS | O app deixa de abrir até ser reassinado — limitação de plataforma, não tratável em código. Com conta paga, ocorre cerca de uma vez por ano |
 | EC-34 | Narração pausada por longo período no iOS | App é suspenso pelo sistema; retomar reinicia a síntese a partir do último bloco registrado (FR-076) |
 | EC-21 | "Baixar livros" acionado sem conexão de rede | Bottom sheet informa a falha sem descartar o que foi digitado; se já houver credenciais, a busca abre e sinaliza o erro de rede |
 | EC-22 | Toques repetidos em "Baixar livros" | Apenas um bottom sheet é aberto; nenhuma navegação duplicada para a busca |
@@ -359,9 +360,9 @@ Estados obrigatórios em cada tela de listagem: carregando, vazio, erro e conte�
 - Nenhum dado de uso é enviado para serviços externos.
 - **Restrição de distribuição:** um app cuja função é baixar da Z-Library não é publicável na Google Play nem na App Store. Com **iOS como alvo primário**, isso passa a ser o obstáculo operacional mais pesado do projeto:
   - No Android, distribuir por APK é trivial e a instalação vale indefinidamente.
-  - No iOS não existe equivalente. As alternativas são sideload via AltStore/SideStore, com certificado válido por 7 dias em conta gratuita ou cerca de um ano em conta paga de desenvolvedor, exigindo reassinatura periódica; ou TestFlight interno, que exige conta de desenvolvedor e cujas builds expiram em torno de 90 dias. O acesso a marketplaces alternativos introduzido na União Europeia não se aplica ao Brasil.
-  - Em qualquer cenário iOS, o app **para de abrir** quando o certificado expira, até ser reassinado. Isso é manutenção recorrente, não um custo de setup.
-  - Ver Q-015 na seção de questões abertas.
+  - No iOS não existe equivalente direto. O projeto **dispõe de conta paga de desenvolvedor Apple**, o que permite certificados de aproximadamente um ano em sideload por AltStore/SideStore, em vez dos 7 dias de uma conta gratuita. O acesso a marketplaces alternativos introduzido na União Europeia não se aplica ao Brasil.
+  - Ainda assim, o app **para de abrir** quando o certificado expira, até ser reassinado. Com conta paga isso é uma manutenção anual, não semanal — um incômodo administrável, mas permanente.
+  - A escolha entre sideload e TestFlight interno é decisão operacional, não requisito: sideload dá cerca de um ano por certificado; TestFlight interno tem builds que expiram em torno de 90 dias. O sideload é o caminho de menor atrito recorrente.
 
 ---
 
@@ -372,7 +373,7 @@ Estados obrigatórios em cada tela de listagem: carregando, vazio, erro e conte�
 - **Bateria** — síntese preguiçosa, apenas para os blocos necessários; nenhuma pré-renderização especulativa do livro inteiro.
 - **Offline** — todas as funcionalidades sobre conteúdo já baixado operam sem rede.
 - **Confiabilidade** — falha em um bloco de síntese não encerra a sessão de escuta.
-- **Compatibilidade** — **iOS como alvo primário**, Android como alvo secundário. React Native com **development build** (EAS ou prebuild); o app não roda no Expo Go por depender de módulo nativo. O TurboModule do sherpa-onnx declara suporte a iOS, o que precisa ser confirmado no spike.
+- **Compatibilidade** — **iOS como alvo primário**, Android como alvo secundário confirmado no escopo desta versão. React Native com **development build** (EAS ou prebuild); o app não roda no Expo Go por depender de módulo nativo. O TurboModule do sherpa-onnx declara suporte a iOS, o que precisa ser confirmado no spike.
 - **Armazenamento no iOS** — arquivos de livro e áudio devem ser marcados para exclusão do backup do iCloud, evitando sincronizar conteúdo volumoso e sensível.
 - **Chaveiro no iOS** — as credenciais devem ser gravadas com acessibilidade restrita ao dispositivo e sem sincronização com o iCloud Keychain, para que a senha armazenada não se propague a outros aparelhos.
 
@@ -516,9 +517,58 @@ Explicitamente **não** serão implementados nesta versão:
 - ~~**Q-013**~~ — *Resolvida:* formato coach mark, com recorte sobre o elemento real (FR-074, FR-075).
 - ~~**Q-014**~~ — *Resolvida:* a reexibição zera todas as orientações de uma vez (FR-069).
 
+- ~~**Q-015**~~ — *Resolvida:* há conta paga de desenvolvedor Apple; certificados de cerca de um ano, reassinatura anual (§12, EC-33).
+- ~~**Q-016**~~ — *Resolvida:* Android permanece no escopo como alvo secundário.
+- ~~**Q-017**~~ — *Resolvida:* o spike valida também o sherpa-onnx no iOS (§19, Frente B).
+- ~~**Q-018**~~ — *Resolvida:* o filtro de idioma da busca inicia pré-ajustado em português (FR-008).
+
 ### Pendentes
 
-- **Q-015** — Com iOS como plataforma principal e sem publicação em loja, qual o método de distribuição pretendido: sideload por AltStore/SideStore, ou TestFlight interno? Existe conta paga de desenvolvedor Apple disponível? A resposta determina a frequência de reassinatura e se o app deixará de abrir periodicamente (§12, EC-33).
-- **Q-016** — O Android continua no escopo desta versão como alvo secundário, ou fica para depois? Manter os dois desde o início encarece testes e distribuição; adiar o Android simplifica, ao custo de descobrir tarde eventuais divergências de plataforma.
-- **Q-017** — O spike deve validar apenas a integração Z-Library, ou também o sherpa-onnx rodando no iOS? O binding é comunitário e declara suporte a iOS, o que ainda não foi confirmado na prática — e é o segundo maior risco técnico do projeto.
-- **Q-018** — Com catálogo apenas em pt-BR (FR-077), o filtro de idioma da busca deve vir pré-ajustado para português, evitando que o usuário baixe livros que não conseguirá ouvir?
+Nenhuma. Todas as questões levantadas durante o levantamento foram respondidas.
+
+---
+
+## 19. Spike Técnico
+
+Aprovado como **primeira etapa do projeto**, anterior a qualquer estimativa de prazo ou início de implementação do produto. O código do spike é descartável e não faz parte do app.
+
+### Objetivo
+
+Provar que as duas dependências de maior risco funcionam de fato, antes de construir requisitos sobre elas.
+
+### Frente A — Integração Z-Library
+
+Precisa demonstrar, em ordem:
+
+1. Autenticação com e-mail e senha, obtendo um token de sessão reutilizável.
+2. Persistência e reuso do token em requisições posteriores.
+3. Busca por título e autor, com filtros de idioma, formato e ano.
+4. Paginação de resultados.
+5. Download efetivo de um arquivo EPUB íntegro e abrível.
+6. Comportamento observado na expiração de sessão, para validar FR-003 e FR-004.
+7. Comportamento observado ao esgotar a cota diária de downloads, para validar FR-018.
+8. Estabilidade do domínio ao longo dos dias do spike.
+
+### Frente B — sherpa-onnx no iOS
+
+Precisa demonstrar, em aparelho físico e não em simulador:
+
+1. Build do TurboModule dentro de um development build do Expo, em iOS.
+2. Carga do modelo Piper pt-BR sem estouro de memória.
+3. Síntese de um bloco de texto com áudio audível e correto.
+4. **RTF medido** em aparelho real — o número que decide se o streaming sob demanda é viável.
+5. Consumo de memória durante síntese contínua.
+6. Síntese prosseguindo com o app em background e áudio ativo, validando FR-044 e FR-076.
+
+### Critérios de sucesso
+
+O spike é bem-sucedido se a Frente A completar os itens 1 a 5 e a Frente B completar os itens 1 a 4 com RTF confortavelmente abaixo de 1.
+
+### Planos alternativos em caso de falha
+
+- **Se a Frente A falhar** — o app perde o download automático e passa a receber EPUBs por importação manual, permanecendo leitor e narrador. Boa parte das seções 4.2 a 4.4 sai do escopo, e o valor do produto diminui, mas ele continua existindo.
+- **Se a Frente B falhar** — substituir o Piper pelo sintetizador nativo do iOS, que roda offline e possui vozes em português. A qualidade cai e o controle sobre o resultado diminui, porém o risco técnico é praticamente nulo e as seções 4.7 a 4.9 se simplificam bastante.
+
+### Entregável
+
+Um relatório com os números medidos, o que funcionou, o que não funcionou, e a recomendação de seguir com o plano principal ou com um dos alternativos.
