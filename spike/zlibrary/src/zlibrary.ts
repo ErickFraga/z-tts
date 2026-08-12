@@ -9,20 +9,28 @@ import { endpoints, type Config } from "./endpoints.ts";
 
 export interface SearchResult {
   id: string;
+  /** Exigido junto do id para detalhe e download — não é opcional na prática. */
+  hash: string;
   title: string;
   author: string;
   language: string;
-  extension: string;
+  /** A origem chama de "format", não "extension". */
+  format: string;
   filesizeBytes: number | null;
   year: string | null;
-  downloadUrl: string | null;
+}
+
+export interface DownloadLink {
+  url: string;
+  allowed: boolean;
+  description: string | null;
 }
 
 export interface SearchFilters {
   languages?: string[];
   extensions?: string[];
-  yearFrom?: number;
-  yearTo?: number;
+  limit?: number;
+  order?: string;
 }
 
 /**
@@ -104,14 +112,26 @@ export class ZLibraryClient {
       password: this.config.password,
     });
 
-    const response = await this.request(endpoints.login, { method: "POST", body });
+    const response = await this.request(endpoints.login, {
+      method: "POST",
+      body,
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+    });
+
     const cookiesBefore = this.cookies.size;
     const payload = await parseJson(response);
 
-    // Alguns clientes relatam os identificadores no corpo em vez de Set-Cookie.
+    // A origem sinaliza sucesso com um flag numérico, e HTTP 200 sozinho não
+    // garante que o login deu certo — credencial errada também devolve 200.
+    if (isRecord(payload) && payload.success !== undefined && Number(payload.success) !== 1) {
+      throw new Error(`Login recusado pela origem (success=${payload.success})`);
+    }
+
+    // Os identificadores aparecem no corpo com dois conjuntos possíveis de
+    // nomes, dependendo da versão da origem.
     const user = isRecord(payload) && isRecord(payload.user) ? payload.user : null;
-    const userId = user ? asString(user.id ?? user.remix_userid) : null;
-    const userKey = user ? asString(user.remix_userkey) : null;
+    const userId = user ? asString(user.id ?? user.user_id ?? user.remix_userid) : null;
+    const userKey = user ? asString(user.remix_userkey ?? user.user_key) : null;
 
     if (userId && userKey) {
       this.cookies.set("remix_userid", userId);
@@ -129,22 +149,72 @@ export class ZLibraryClient {
     return { tokenSource: "cabeçalho Set-Cookie" };
   }
 
+  /**
+   * Busca. É POST com corpo form-encoded, não GET com query string — o
+   * cliente do KOReader confirma isso, e a hipótese anterior estava errada.
+   */
   async search(
     term: string,
     filters: SearchFilters = {},
     page = 1,
-  ): Promise<SearchResult[]> {
-    const params = new URLSearchParams({ message: term, page: String(page) });
-    for (const language of filters.languages ?? []) params.append("languages[]", language);
-    for (const extension of filters.extensions ?? []) params.append("extensions[]", extension);
-    if (filters.yearFrom) params.set("yearFrom", String(filters.yearFrom));
-    if (filters.yearTo) params.set("yearTo", String(filters.yearTo));
+  ): Promise<{ results: SearchResult[]; totalItems: number | null }> {
+    const body = new URLSearchParams({
+      message: term,
+      page: String(page),
+      limit: String(filters.limit ?? 30),
+      order: filters.order ?? "popular",
+    });
+    for (const language of filters.languages ?? []) body.append("languages[]", language);
+    for (const extension of filters.extensions ?? []) body.append("extensions[]", extension);
 
-    const response = await this.request(`${endpoints.search}?${params}`);
+    const response = await this.request(endpoints.search, {
+      method: "POST",
+      body,
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+    });
+
     const payload = await parseJson(response);
-    const books = isRecord(payload) && Array.isArray(payload.books) ? payload.books : [];
+    if (!isRecord(payload)) return { results: [], totalItems: null };
 
-    return books.filter(isRecord).map(toSearchResult);
+    // A origem devolve os resultados em `books`, mas cai para
+    // `exactMatch.books` quando a busca casa exatamente com um título.
+    const exact = isRecord(payload.exactMatch) ? payload.exactMatch : null;
+    const raw = Array.isArray(payload.books)
+      ? payload.books
+      : exact && Array.isArray(exact.books)
+        ? exact.books
+        : [];
+
+    const pagination = isRecord(payload.pagination) ? payload.pagination : null;
+
+    return {
+      results: raw.filter(isRecord).map(toSearchResult),
+      totalItems: pagination ? asNumber(pagination.total_items) : null,
+    };
+  }
+
+  /**
+   * Obtém o link real de download. A busca não o traz pronto: é preciso pedir
+   * separadamente, informando id e hash do livro.
+   */
+  async getDownloadLink(id: string, hash: string): Promise<DownloadLink> {
+    const payload = await parseJson(await this.request(endpoints.downloadLink(id, hash)));
+    const file = isRecord(payload) && isRecord(payload.file) ? payload.file : null;
+
+    if (!file) {
+      throw new Error(
+        `Resposta sem o objeto "file". Recebido: ${JSON.stringify(payload).slice(0, 160)}`,
+      );
+    }
+
+    const url = asString(file.downloadLink);
+    if (!url) throw new Error("Objeto \"file\" sem downloadLink");
+
+    return {
+      url,
+      allowed: file.allowDownload !== false,
+      description: asString(file.description),
+    };
   }
 
   /** Consulta o perfil — serve para checar sessão válida e cota diária. */
@@ -171,13 +241,14 @@ export class ZLibraryClient {
 function toSearchResult(book: Record<string, unknown>): SearchResult {
   return {
     id: asString(book.id) ?? "",
+    hash: asString(book.hash) ?? "",
     title: asString(book.title) ?? "(sem título)",
     author: asString(book.author) ?? "(sem autor)",
     language: asString(book.language) ?? "",
-    extension: (asString(book.extension) ?? "").toLowerCase(),
-    filesizeBytes: asNumber(book.filesizeString ?? book.filesize),
+    // "format" é o nome usado pela origem; "extension" fica como reserva.
+    format: (asString(book.format ?? book.extension) ?? "").toLowerCase(),
+    filesizeBytes: asNumber(book.filesize ?? book.filesizeString),
     year: asString(book.year),
-    downloadUrl: asString(book.dl ?? book.downloadUrl ?? book.href),
   };
 }
 

@@ -9,7 +9,7 @@
 
 import { writeFile, mkdir } from "node:fs/promises";
 import { loadConfig } from "./endpoints.ts";
-import { ZLibraryClient, HttpError, type SearchResult } from "./zlibrary.ts";
+import { ZLibraryClient, HttpError, type SearchResult, type SearchFilters } from "./zlibrary.ts";
 import { checkEpub } from "./epub.ts";
 import { Report, explainNetworkCode } from "./report.ts";
 import { preflight, summarizePreflight } from "./preflight.ts";
@@ -64,16 +64,16 @@ if (!authenticated) {
 }
 
 // --------------------------------------------------------------- 3. Busca
+const SEARCH_FILTERS: SearchFilters = { languages: ["portuguese"], extensions: ["epub"] };
+
 let results: SearchResult[] = [];
 
 if (!authenticated) {
   report.skip(3, "Busca com filtros", "depende do login");
 } else {
   await report.run(3, "Busca com filtros", async () => {
-    results = await client.search(config.searchTerm, {
-      languages: ["portuguese"],
-      extensions: ["epub"],
-    });
+    const response = await client.search(config.searchTerm, SEARCH_FILTERS);
+    results = response.results;
 
     if (results.length === 0) {
       return {
@@ -82,12 +82,18 @@ if (!authenticated) {
       };
     }
 
-    const offFilter = results.filter((r) => r.extension && r.extension !== "epub");
-    const filterNote = offFilter.length
-      ? ` — ATENÇÃO: ${offFilter.length} resultado(s) fora do filtro epub, filtro não confiável`
-      : " — filtro de formato respeitado";
+    const offFilter = results.filter((r) => r.format && r.format !== "epub");
+    const missingHash = results.filter((r) => !r.hash).length;
 
-    return { outcome: "PASS", detail: `${results.length} resultado(s)${filterNote}` };
+    const notes = [
+      offFilter.length
+        ? `ATENÇÃO: ${offFilter.length} fora do filtro epub, filtro não confiável`
+        : "filtro de formato respeitado",
+      missingHash ? `ATENÇÃO: ${missingHash} sem hash, download inviável` : null,
+      response.totalItems !== null ? `${response.totalItems} no total` : null,
+    ].filter(Boolean);
+
+    return { outcome: "PASS", detail: `${results.length} resultado(s) — ${notes.join(" · ")}` };
   });
 }
 
@@ -96,11 +102,7 @@ if (results.length === 0) {
   report.skip(4, "Paginação", "depende da busca");
 } else {
   await report.run(4, "Paginação", async () => {
-    const second = await client.search(
-      config.searchTerm,
-      { languages: ["portuguese"], extensions: ["epub"] },
-      2,
-    );
+    const { results: second } = await client.search(config.searchTerm, SEARCH_FILTERS, 2);
 
     if (second.length === 0) {
       return { outcome: "PASS", detail: "página 2 vazia — acervo pequeno ou fim dos resultados" };
@@ -116,22 +118,32 @@ if (results.length === 0) {
 }
 
 // ------------------------------------------------------------- 5. Download
-const candidate = results.find((r) => r.downloadUrl && r.extension === "epub");
+// Duas etapas: pedir o link e só então baixar. A busca não traz URL pronta.
+const candidate = results.find((r) => r.id && r.hash && r.format === "epub");
 
-if (!candidate?.downloadUrl) {
+if (!candidate) {
   report.skip(
     5,
     "Download de EPUB",
-    results.length === 0 ? "depende da busca" : "nenhum resultado trouxe URL de download",
+    results.length === 0 ? "depende da busca" : "nenhum resultado veio com id e hash",
   );
 } else {
   await report.run(5, "Download de EPUB", async () => {
-    const bytes = await client.download(candidate.downloadUrl!);
+    const link = await client.getDownloadLink(candidate.id, candidate.hash);
+
+    if (!link.allowed) {
+      return {
+        outcome: "BLOCKED",
+        detail: `download negado pela origem${link.description ? `: ${link.description}` : ""} — provável cota esgotada`,
+      };
+    }
+
+    const bytes = await client.download(link.url);
     const check = checkEpub(bytes);
 
     if (check.valid) {
       await mkdir("downloads", { recursive: true });
-      await writeFile(`downloads/${candidate.id || "amostra"}.epub`, bytes);
+      await writeFile(`downloads/${candidate.id}.epub`, bytes);
     }
 
     return {

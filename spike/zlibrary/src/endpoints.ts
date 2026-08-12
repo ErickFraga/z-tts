@@ -13,14 +13,17 @@
  */
 
 export const endpoints = {
-  /** POST — espera-se email/password no corpo, devolvendo identificadores de sessão. */
+  /** POST form-encoded com email e password. */
   login: "/eapi/user/login",
 
-  /** GET — busca paginada. */
+  /** POST form-encoded — não GET. Confirmado no cliente do KOReader. */
   search: "/eapi/book/search",
 
-  /** GET — metadados de um livro específico. */
-  bookDetail: (id: string) => `/eapi/book/${id}`,
+  /** GET — exige id E hash. */
+  bookDetail: (id: string, hash: string) => `/eapi/book/${id}/${hash}`,
+
+  /** GET — devolve o link real de download; a busca não o traz pronta. */
+  downloadLink: (id: string, hash: string) => `/eapi/book/${id}/${hash}/file`,
 
   /** GET — perfil do usuário, útil para checar cota diária e sessão válida. */
   profile: "/eapi/user/profile",
