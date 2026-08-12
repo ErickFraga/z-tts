@@ -42,6 +42,17 @@ a exercitá-los.
 Contornar o bloqueio está fora do escopo do spike por decisão registrada antes
 da execução (§19, "Fora do escopo do spike").
 
+### Medição pendente
+
+Esta medição testou **um único domínio**, e um domínio só não distingue
+"bloqueio dirigido a `z-library.sk`" de "bloqueio à origem inteira". A diferença
+importa: no primeiro caso outro endereço resolve, no segundo nenhum resolve.
+
+O probe passou a percorrer uma lista de candidatos no passo 0 (ver
+`zlibrary/src/domains.ts`). **Ainda não foi executado** com essa mudança — a
+tabela acima continua valendo apenas para `z-library.sk`. A recomendação abaixo
+não muda enquanto essa segunda execução não trouxer um domínio que responda.
+
 ### Recomendação
 
 Acionar o plano alternativo já previsto: **o app deixa de baixar livros e passa
@@ -72,5 +83,6 @@ a ser o núcleo do produto em vez de um complemento.
 
 | Pergunta | Respondida? |
 |---|---|
-| Dá para baixar da Z-Library? | Não, a partir desta rede |
+| Dá para baixar da Z-Library? | Não por `z-library.sk`, a partir desta rede |
+| Algum outro domínio da origem responde? | **Em aberto — descoberta implementada, não executada** |
 | O Piper roda rápido o bastante no iPhone? | **Em aberto — próxima medição** |

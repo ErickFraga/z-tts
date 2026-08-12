@@ -11,32 +11,57 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { loadConfig } from "./endpoints.ts";
 import { ZLibraryClient, HttpError, type SearchResult, type SearchFilters } from "./zlibrary.ts";
 import { checkEpub } from "./epub.ts";
-import { Report, explainNetworkCode } from "./report.ts";
-import { preflight, summarizePreflight } from "./preflight.ts";
+import { Report } from "./report.ts";
+import {
+  autoDiscoverAndSetBaseUrl,
+  summarizeDiscovery,
+  type DiscoveryResult,
+} from "./discovery.ts";
+import { cliNetworkGate, consoleUi } from "./cli.ts";
 
 const config = loadConfig();
-const client = new ZLibraryClient(config);
 const report = new Report();
 
 console.log(`Frente A — Integração Z-Library`);
-console.log(`Domínio: ${config.baseUrl}`);
-console.log(`Conta:   ${maskEmail(config.email)}\n`);
+console.log(`Domínio configurado: ${config.baseUrl}`);
+console.log(`Candidatos:          ${config.domains.length}`);
+console.log(`Conta:               ${maskEmail(config.email)}\n`);
 
-// -------------------------------------------------------------- 0. Pré-voo
-const connectivity = await preflight(config.baseUrl);
-const reachable = connectivity.addresses.length > 0 && connectivity.tcpReachable;
+// ------------------------------------------- 0. Pré-voo e descoberta de domínio
+// A descoberta substitui o pré-voo de domínio único: o configurado é o primeiro
+// candidato, e os demais só entram se ele não responder. Ela grava o domínio
+// escolhido em `config`, então o cliente só pode ser construído depois. Roda
+// dentro do passo para que o tempo medido seja o da varredura inteira — uma
+// lista longa esgotando o tempo limite custa caro, e isso precisa aparecer.
+let discovery: DiscoveryResult = { success: false, attempts: [] };
 
-await report.run(0, "Conectividade com o domínio", async () => ({
-  outcome: reachable ? "PASS" : "BLOCKED",
-  detail: summarizePreflight(connectivity),
-}));
+await report.run(0, "Conectividade e descoberta de domínio", async () => {
+  discovery = await autoDiscoverAndSetBaseUrl(
+    config,
+    { network: cliNetworkGate, ui: consoleUi },
+    {
+      interactive: true,
+      onAttempt: (attempt) =>
+        console.log(`  ${attempt.usable ? "✓" : "✗"} ${attempt.summary}`),
+    },
+  );
 
-if (!reachable) {
-  const cause =
-    explainNetworkCode(connectivity.dnsError ?? connectivity.tcpError ?? "") ??
-    "causa não identificada";
-  console.log(`\n  Causa provável: ${cause}.`);
-  console.log(`  Sem alcançar o domínio, nenhum passo adiante tem valor diagnóstico.\n`);
+  return {
+    outcome: discovery.success ? "PASS" : "BLOCKED",
+    detail: summarizeDiscovery(discovery),
+  };
+});
+
+const reachable = discovery.success;
+const client = new ZLibraryClient(config);
+
+if (!reachable && discovery.attempts.length > 1) {
+  // A varredura só chega aqui depois de o porteiro confirmar que há rede. Todos
+  // os candidatos falharem, com a rede de pé, é um achado mais forte que um
+  // domínio morto: aponta para bloqueio dirigido à origem, não para endereço
+  // trocado — e isso não tem conserto do lado do código.
+  console.log(`\n  Nenhum candidato respondeu, com a rede funcionando.`);
+  console.log(`  Sem alcançar a origem, nenhum passo adiante tem valor diagnóstico.\n`);
 }
 
 // ---------------------------------------------------------------- 1. Login
@@ -204,7 +229,14 @@ const exitCode = report.summarize();
 await writeFile(
   "report.json",
   JSON.stringify(
-    { executadoEm: new Date().toISOString(), dominio: config.baseUrl, passos: report.toJSON() },
+    {
+      executadoEm: new Date().toISOString(),
+      dominio: config.baseUrl,
+      // Os candidatos descartados são metade do achado quando o passo 0 bloqueia:
+      // dizem quantos domínios foram testados e como cada um falhou.
+      descoberta: discovery,
+      passos: report.toJSON(),
+    },
     null,
     2,
   ),

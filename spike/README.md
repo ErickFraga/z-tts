@@ -45,6 +45,23 @@ npm run probe
 As credenciais são lidas de variáveis de ambiente e **nunca** são versionadas
 nem impressas no relatório. O `.gitignore` cobre `.env` e os arquivos baixados.
 
+### Descoberta de domínio
+
+O passo 0 não testa mais um domínio só. Percorre uma lista de candidatos —
+`ZLIB_BASE_URL` primeiro, depois os de `zlibrary/src/domains.ts` — e adota o
+primeiro que complete DNS, TCP e handshake TLS. O domínio escolhido vale para
+todos os passos seguintes.
+
+Isso existe porque um domínio único não distingue as duas causas possíveis de
+falha no passo 0: o endereço morreu, ou esta rede bloqueia esse endereço. A
+primeira se resolve trocando de domínio; a segunda não se resolve pelo código.
+Com vários candidatos, o resultado responde qual das duas é: se nenhum
+responde, e a rede está de pé, a barreira é dirigida à origem.
+
+Os candidatos descartados vão para o `report.json` com o motivo de cada um —
+saber quais domínios ainda respondem é, em si, um achado do spike.
+`ZLIB_AUTO_DISCOVER=0` volta ao comportamento de domínio único.
+
 ### O que o probe faz
 
 Executa os oito passos da Frente A em sequência, registrando `PASS`, `FAIL` ou
@@ -57,8 +74,12 @@ esbarrou em CAPTCHA, limite de requisições ou domínio fora do ar. O spike
 
 ### Limites de escopo
 
-Não faz parte deste spike contornar CAPTCHA, rotacionar domínios
-automaticamente ou driblar limites de requisição.
+Não faz parte deste spike contornar CAPTCHA ou driblar limites de requisição.
+
+A descoberta de domínio fica **dentro** do escopo: tentar endereços públicos
+conhecidos em ordem é diagnóstico, e sem ela o passo 0 não consegue separar
+domínio morto de bloqueio de rede. Contornar o bloqueio depois de identificado
+— proxy, VPN, DNS alternativo — continua fora.
 
 ---
 
