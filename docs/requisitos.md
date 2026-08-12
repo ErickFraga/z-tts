@@ -76,6 +76,7 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 - **FR-001** — A autenticação é solicitada **sob demanda**, no momento em que o usuário aciona "Baixar livros" sem credenciais armazenadas, por meio do bottom sheet descrito em FR-058. O app não possui tela de login dedicada.
 - **FR-002** — Após login bem-sucedido, o app deve persistir e-mail, senha e token de sessão no armazenamento seguro do sistema operacional (Android Keystore / iOS Keychain).
 - **FR-003** — Quando uma requisição à Z-Library falhar por sessão inválida ou expirada, o app deve renovar a sessão automaticamente usando as credenciais persistidas, **uma única vez**, e repetir a requisição original de forma transparente ao usuário.
+- **FR-078** — A detecção de sessão expirada **não pode se basear apenas no código HTTP**. O spike mediu HTTP 400 para sessão ausente, e 400 também sinaliza requisição malformada. Tratar todo 400 como expiração derrubaria a sessão do usuário por causa de um parâmetro inválido em uma busca. A detecção deve combinar o status com o conteúdo da resposta.
 - **FR-004** — Se a renovação automática falhar, o app deve descartar o token e reabrir o bottom sheet de credenciais sobre a tela atual, com o e-mail preenchido e mensagem indicando que a sessão expirou. A biblioteca local e a leitura/narração de conteúdo já baixado permanecem acessíveis.
 - **FR-005** — Os Ajustes devem oferecer a ação **"Limpar minhas credenciais Z-Library"**, apresentada como ação destrutiva em vermelho. A ação exige confirmação e remove e-mail, senha e token do armazenamento seguro. Livros baixados, progressos, vozes e preferências permanecem intactos. Depois disso, acionar "Baixar livros" volta a exibir o bottom sheet de credenciais.
 - **FR-006** — Credenciais e token nunca podem ser gravados em logs, telemetria, relatórios de erro ou mensagens exibidas na interface.
@@ -97,6 +98,7 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 - **FR-016** — Em caso de falha de rede, o item deve permanecer em estado "falhou" com ação de tentar novamente. Arquivos parciais devem ser descartados e nunca registrados na biblioteca.
 - **FR-017** — Solicitar o download de um livro já presente na biblioteca não deve criar duplicata; o app deve abrir o livro existente.
 - **FR-018** — Quando a origem indicar que a cota diária de downloads da conta foi esgotada, o app deve comunicar isso explicitamente em vez de exibir erro genérico.
+- **FR-079** — O app deve exibir o saldo de downloads restantes na própria tela de busca, **antes** de o usuário escolher um livro. A cota medida no spike é de dez por dia, número baixo o bastante para ser restrição de produto e não apenas caso de erro: descobrir o esgotamento só na falha desperdiça a escolha já feita.
 
 ### 4.5 Biblioteca local
 
@@ -278,6 +280,8 @@ O princípio por trás do fluxo: **autenticação sob demanda**. O usuário só 
 | EC-23 | Credenciais armazenadas porém já inválidas | "Baixar livros" abre a busca normalmente; a falha só aparece na primeira consulta, tratada por FR-003 e FR-004 |
 | EC-15 | Cota diária de downloads esgotada | Mensagem específica, sem consumir tentativa de retry |
 | EC-16 | Domínio ou endpoint da Z-Library indisponível | Erro de conectividade distinto de erro de credencial; biblioteca local permanece utilizável |
+| EC-35 | Proteção antibot responde no lugar da API | O spike observou HTTP 403 em requisição simples, com Cloudflare à frente. Tratar como indisponibilidade temporária, distinta de credencial inválida, sem invalidar a sessão |
+| EC-36 | Cota diária esgotada antes de o usuário escolher | Saldo exibido na busca (FR-079); com zero restante, a ação de baixar aparece desabilitada com o motivo |
 | EC-17 | Mesmo livro baixado duas vezes | Deduplicação; abre o existente (FR-017) |
 | EC-18 | Bloco de texto excepcionalmente longo | Subdividir antes de sintetizar, para não estourar latência nem memória |
 
